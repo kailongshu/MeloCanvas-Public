@@ -1,3 +1,4 @@
+import { isDouyinAudioId } from './douyin-audio'
 import { validateSourceId, type PlaybackMode } from './listening'
 import { isLocalAudioId } from './local-audio'
 
@@ -16,7 +17,7 @@ export function validateQueueEntry(
 	entry: QueueEntry,
 	mode: PlaybackMode,
 ): void {
-	if (isLocalAudioId(entry.sourceId)) {
+	if (isLocalAudioId(entry.sourceId) || isDouyinAudioId(entry.sourceId)) {
 		if (
 			mode === 'music' &&
 			(entry.entryId === entry.sourceId ||
@@ -25,7 +26,7 @@ export function validateQueueEntry(
 						entry.entryId))
 		)
 			return
-		throw new Error('本地音频仅用于音乐播放队列')
+		throw new Error('该音频仅用于音乐播放队列')
 	}
 	validateSourceId(entry.sourceId)
 	if (entry.entryId === entry.sourceId) return

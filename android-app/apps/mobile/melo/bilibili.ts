@@ -113,6 +113,7 @@ export function beginBilibiliRequest<T>(
 			typeof body === 'object' &&
 			'code' in body &&
 			body.code === -101 &&
+			!nav &&
 			accountTransport
 		) {
 			await accountTransport.expired()

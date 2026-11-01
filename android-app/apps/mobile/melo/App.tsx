@@ -66,9 +66,16 @@ import { Library, migrate } from './core/database'
 import { FollowingFeedStore } from './core/following-feed'
 import { ImportStore } from './core/imports'
 import { ListeningLibrary } from './core/listening'
+import {
+	DouyinAudioStore,
+	isDouyinAudioId,
+	type DouyinAudio,
+} from './core/douyin-audio'
 import { LocalAudioStore } from './core/local-audio'
 import type { SearchItem, Source } from './core/model'
 import {
+	douyinLibrarySource,
+	isDouyinLibrarySource,
 	localLibrarySource,
 	isLocalLibrarySource,
 	type MusicLibrarySource,
@@ -106,6 +113,17 @@ import {
 	ListeningUnavailable,
 	type ListeningResume,
 } from './listening-ui'
+import {
+	douyinSession,
+	isDouyinShareInput,
+	useDouyinSession,
+} from './douyin-session'
+import {
+	DouyinCollectionModal,
+	DouyinLoginModal,
+	DouyinSearchSection,
+} from './douyin-ui'
+import { useAutoSyncTrackLyrics } from './lyrics-ui'
 import { LocalAudioSection } from './local-audio-ui'
 import { MusicPartsPanel, type MusicPartsIdentity } from './music-parts-ui'
 import {
@@ -189,12 +207,13 @@ async function readNativePlayerIdentity(): Promise<PreviewPlayerIdentity> {
 	}
 }
 
-const noAccountAction = () => {}
+
 export default function App({
 	accountName = 'B 站账号',
 	accountId,
 	accountAvatar,
-	onSignOut = noAccountAction,
+	onSignOut,
+	onRequestBilibiliLogin,
 	onReconnect,
 }: {
 	accountName?: string
@@ -202,6 +221,7 @@ export default function App({
 	accountAvatar?: string
 	onSignOut?: () => void
 	onReconnect?: () => void
+	onRequestBilibiliLogin?: () => void
 } = {}) {
 	const [result] = useState(() => {
 		try {
@@ -212,6 +232,7 @@ export default function App({
 				listeningLibrary: new ListeningLibrary(db),
 				sessionStore: new SessionStore(db),
 				localAudioStore: new LocalAudioStore(db),
+				douyinAudioStore: new DouyinAudioStore(db),
 				playlistStore: new PlaylistStore(db),
 				creatorStore: new CreatorStore(db),
 				creatorPostCache: new CreatorPostCache(db),
@@ -230,6 +251,7 @@ export default function App({
 				listeningLibrary: null,
 				sessionStore: null,
 				localAudioStore: null,
+				douyinAudioStore: null,
 				playlistStore: null,
 				creatorStore: null,
 				creatorPostCache: null,
@@ -250,6 +272,7 @@ export default function App({
 			result.listeningLibrary &&
 			result.sessionStore &&
 			result.localAudioStore &&
+			result.douyinAudioStore &&
 			result.playlistStore &&
 			result.creatorStore &&
 			result.creatorPostCache &&
@@ -266,10 +289,12 @@ export default function App({
 					accountAvatar={accountAvatar}
 					onSignOut={onSignOut}
 					onReconnect={onReconnect}
+					onRequestBilibiliLogin={onRequestBilibiliLogin}
 					library={result.library}
 					listeningLibrary={result.listeningLibrary}
 					sessionStore={result.sessionStore}
 					localAudioStore={result.localAudioStore}
+					douyinAudioStore={result.douyinAudioStore}
 					playlistStore={result.playlistStore}
 					creatorStore={result.creatorStore}
 					creatorPostCache={result.creatorPostCache}
@@ -303,6 +328,8 @@ function Product({
 	listeningLibrary,
 	sessionStore,
 	localAudioStore,
+	douyinAudioStore,
+	onRequestBilibiliLogin,
 	playlistStore,
 	creatorStore,
 	creatorPostCache,
@@ -317,11 +344,13 @@ function Product({
 	accountName: string
 	accountId?: string
 	accountAvatar?: string
-	onSignOut: () => void
+	onSignOut?: () => void
+	onRequestBilibiliLogin?: () => void
 	onReconnect?: () => void
 	library: Library
 	listeningLibrary: ListeningLibrary
 	localAudioStore: LocalAudioStore
+	douyinAudioStore: DouyinAudioStore
 	sessionStore: SessionStore
 	playlistStore: PlaylistStore
 	creatorStore: CreatorStore
@@ -418,7 +447,8 @@ function Product({
 	const biliImports = useBilibiliImports(
 		importStore,
 		library,
-		playlistStore,
+
+	playlistStore,
 		videoCatalog,
 		videoSaves,
 	)
@@ -472,7 +502,7 @@ function Product({
 	const searchHistory = useSearchHistory(library)
 	const { find: runSearch } = search
 	const [filter, setFilter] = useState<
-		'all' | 'music' | 'listening' | 'creator'
+		'all' | 'music' | 'listening' | 'creator' | 'douyin'
 	>('all')
 	const creatorSearch = useCreatorSearch(
 		tab === 'search' && (filter === 'creator' || filter === 'all'),
@@ -495,6 +525,8 @@ function Product({
 			? `library:${playlists.state.currentId ?? (listeningLibraryOpen ? 'listening' : libraryCollection)}`
 			: tab === 'search' && filter === 'creator'
 				? 'search:creator'
+				: tab === 'search' && filter === 'douyin'
+					? 'search:douyin'
 				: tab === 'profile' && profileSettingsOpen
 					? 'profile:settings'
 					: tab
@@ -518,6 +550,22 @@ function Product({
 		listeningLibrary,
 		sessionStore,
 		localAudioStore,
+	douyinAudioStore,
+	)
+	useAutoSyncTrackLyrics(library, player.track)
+	const douyinState = useDouyinSession()
+	useEffect(() => {
+		void douyinSession.restore()
+	}, [])
+	const [douyinLoginOpen, setDouyinLoginOpen] = useState(false)
+	const [douyinCollectionKind, setDouyinCollectionKind] = useState<
+		'favorite' | 'collection' | null
+	>(null)
+	const [douyinSubmittedQuery, setDouyinSubmittedQuery] = useState('')
+	const [douyinSearchRevision, setDouyinSearchRevision] = useState(0)
+	const musicLikedIds = useMemo(
+		() => new Set(musicLikes.map((source) => source.id)),
+		[musicLikes],
 	)
 	const heartDiscovery = useMemo(() => ({
 		discover: async (signal: AbortSignal) => {
@@ -829,6 +877,14 @@ function Product({
 
 	async function find(value = query, kind = filter, order = search.order) {
 		Keyboard.dismiss()
+		if (isDouyinShareInput(value) || kind === 'douyin') {
+			setFilter('douyin')
+			searchHistory.session.record(value, 'douyin', order)
+			creatorSearch.session.cancel()
+			setDouyinSubmittedQuery(value.trim())
+			setDouyinSearchRevision((rev) => rev + 1)
+			return
+		}
 		searchHistory.session.record(value, kind, order)
 		try {
 			if (creatorSearchMid(value)) {
@@ -1285,7 +1341,71 @@ function Product({
 			setSavingBv('')
 		}
 	}
+	async function playDouyinQueue(items: DouyinAudio[], startId: string) {
+		try {
+			await playbackIntent.run({
+				preparation: player,
+				prepare: async () => ({ items, startId }),
+				activate: (target, preparation) =>
+					player.playDouyinAudio(target.items, target.startId, preparation),
+				onSuccess: () => {
+					setDouyinCollectionKind(null)
+					setFullPlayer(true)
+				},
+			})
+		} catch (error) {
+			setNotice(
+				error instanceof Error ? error.message : '抖音原声播放失败，请重试',
+			)
+		}
+	}
+	async function playDouyinById(id: string) {
+		const saved = douyinAudioStore.get(id)
+		if (!saved) {
+			setNotice('该抖音原声记录不存在，请重新搜索或提取链接')
+			return
+		}
+		await playDouyinQueue([saved], saved.id)
+	}
+	function toggleLikeDouyin(audio: DouyinAudio) {
+		try {
+			douyinAudioStore.upsert(audio)
+			const liked = library.musicLikes().some((source) => source.id === audio.id)
+			library.setLiked(douyinLibrarySource(audio), !liked)
+			setMusicLikes(library.musicLikes())
+			setNotice(liked ? '已取消喜欢' : '已加入本地喜欢')
+		} catch (error) {
+			setNotice(
+				`保存失败：${error instanceof Error ? error.message : '请重试'}`,
+			)
+		}
+	}
+	function addDouyinToPlaylist(items: DouyinAudio[]) {
+		if (!items.length) return
+		try {
+			douyinAudioStore.upsertMany(items)
+			setDouyinCollectionKind(null)
+			playlists.session.requestAddSources(items.map(douyinLibrarySource))
+		} catch (error) {
+			setNotice(error instanceof Error ? error.message : '加入歌单失败，请重试')
+		}
+	}
 	function likeLocal(id: string) {
+		if (isDouyinAudioId(id)) {
+			try {
+				const audio = douyinAudioStore.get(id)
+				if (!audio) throw new Error('抖音原声记录不存在，请重新搜索')
+				const liked = library.musicLikes().some((source) => source.id === id)
+				library.setLiked(douyinLibrarySource(audio), !liked)
+				setMusicLikes(library.musicLikes())
+				setNotice(liked ? '已取消喜欢' : '已加入本地喜欢')
+			} catch (error) {
+				setNotice(
+					`保存失败：${error instanceof Error ? error.message : '请重试'}`,
+				)
+			}
+			return
+		}
 		try {
 			const audio = localAudioStore.get(id)
 			if (!audio) throw new Error('本地音频不存在，请重新导入')
@@ -1300,6 +1420,16 @@ function Product({
 		}
 	}
 	function addLocalToPlaylist(id: string) {
+		if (isDouyinAudioId(id)) {
+			try {
+				const audio = douyinAudioStore.get(id)
+				if (!audio) throw new Error('抖音原声记录不存在，请重新搜索')
+				playlists.session.requestAddSources([douyinLibrarySource(audio)])
+			} catch (error) {
+				setNotice(error instanceof Error ? error.message : '读取失败，请重试')
+			}
+			return
+		}
 		try {
 			const audio = localAudioStore.get(id)
 			if (!audio) throw new Error('本地音频不存在，请重新导入')
@@ -1309,6 +1439,31 @@ function Product({
 		}
 	}
 	function musicLibraryRow(source: MusicLibrarySource, _index: number) {
+		if (isDouyinLibrarySource(source))
+			return (
+				<CollectionSongRow
+					key={source.id}
+					title={source.originalTitle}
+					subtitle={`${source.performer || '抖音原声'}，抖音`}
+					artwork={source.artwork}
+					disabled={player.switching}
+					onPlay={() => {
+						void playDouyinById(source.id)
+					}}
+					trailing={
+						<CollectionMenu
+							label={`${source.originalTitle} 更多操作`}
+							actions={[
+								{ label: '取消喜欢', onPress: () => likeLocal(source.id) },
+								{
+									label: '添加到歌单',
+									onPress: () => addLocalToPlaylist(source.id),
+								},
+							]}
+						/>
+					}
+				/>
+			)
 		if (!isLocalLibrarySource(source))
 			return (
 				<CollectionSongRow
@@ -1408,6 +1563,10 @@ function Product({
 		}
 	}
 	async function playRecentMusic(id: string) {
+		if (isDouyinAudioId(id)) {
+			await playDouyinById(id)
+			return
+		}
 		if (id.startsWith('local:')) {
 			await playLocalAudio(id)
 			return
@@ -1461,7 +1620,8 @@ function Product({
 				preparation: player,
 				prepare: async () => {
 					return preparePlaylistPlayback(
-						playlistStore,
+
+	playlistStore,
 						library,
 						playlistId,
 						startItemId,
@@ -1499,7 +1659,7 @@ function Product({
 	}
 	const navigateSearch = (
 		value?: string,
-		mode?: 'music' | 'listening' | 'creator',
+		mode?: 'music' | 'listening' | 'creator' | 'douyin',
 		returnTab?: Tab,
 	) => {
 		followingFeed.session.close()
@@ -1954,6 +2114,57 @@ function Product({
 												onRecommendations={openRecommendations}
 												onFm={openFm}
 											/>
+											<Card style={{ marginTop: 14 }}>
+												<View
+													style={{
+														flexDirection: 'row',
+														alignItems: 'center',
+														justifyContent: 'space-between',
+														gap: 8,
+													}}
+												>
+													<View style={{ flex: 1, gap: 2 }}>
+														<T weight='700'>抖音原声 · 同步歌词</T>
+														<T
+															size={12}
+															muted
+														>
+															粘贴分享链接免登录提取原声后台听歌，或登录同步喜欢与收藏
+														</T>
+													</View>
+													<Button
+														secondary
+														onPress={() => setDouyinLoginOpen(true)}
+													>
+														{douyinState.status === 'authenticated'
+															? douyinState.nickname || '抖音已连接'
+															: '抖音登录'}
+													</Button>
+												</View>
+												<View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}>
+													<Button
+														onPress={() =>
+															navigateSearch(undefined, 'douyin', 'home')
+														}
+													>
+														提取链接 / 搜原声
+													</Button>
+													<Button
+														secondary
+														onPress={() => setDouyinCollectionKind('favorite')}
+													>
+														抖音喜欢
+													</Button>
+													<Button
+														secondary
+														onPress={() =>
+															setDouyinCollectionKind('collection')
+														}
+													>
+														抖音收藏
+													</Button>
+												</View>
+											</Card>
 											{likes.length > 0 && (
 												<>
 													<T
@@ -2025,6 +2236,25 @@ function Product({
 									}}
 									onOpenCreator={openCreatorSummary}
 									renderRow={row}
+									douyinContent={
+										<DouyinSearchSection
+											submittedQuery={douyinSubmittedQuery}
+											searchRevision={douyinSearchRevision}
+											likedIds={musicLikedIds}
+											playbackBusy={
+												player.switching || !!listening.pendingBvid
+											}
+											currentSourceId={
+												player.track?.sourceId ?? player.track?.id ?? null
+											}
+											onOpenLogin={() => setDouyinLoginOpen(true)}
+											onPlayQueue={(items, startId) => {
+												void playDouyinQueue(items, startId)
+											}}
+											onToggleLike={toggleLikeDouyin}
+											onAddToPlaylist={addDouyinToPlaylist}
+										/>
+									}
 								/>
 							)}
 							{tab === 'library' && (
@@ -2136,6 +2366,41 @@ function Product({
 													<T variant='caption'>音乐库与播放记录保存在本机</T>
 												</View>
 											</View>
+											{onRequestBilibiliLogin && (
+												<View style={{ marginBottom: 18 }}>
+													<Button
+														secondary
+														onPress={onRequestBilibiliLogin}
+													>
+														登录 B 站账号（可选，解锁 B 站在线播放）
+													</Button>
+												</View>
+											)}
+											<SettingsGroup title='抖音原声'>
+												<SettingsRow
+													label='抖音账号'
+													value={
+														douyinState.status === 'authenticated'
+															? douyinState.nickname || '已连接'
+															: '未登录'
+													}
+													onPress={() => setDouyinLoginOpen(true)}
+												/>
+												<SettingsRow
+													label='抖音 · 我的喜欢'
+													onPress={() => setDouyinCollectionKind('favorite')}
+												/>
+												<SettingsRow
+													label='抖音 · 我的收藏'
+													onPress={() => setDouyinCollectionKind('collection')}
+												/>
+												<SettingsRow
+													label='提取抖音分享链接 / 搜索原声'
+													onPress={() =>
+														navigateSearch(undefined, 'douyin', 'profile')
+													}
+												/>
+											</SettingsGroup>
 											<SettingsGroup title='关注'>
 												<SettingsRow
 													label='关注的 UP 主'
@@ -2247,7 +2512,23 @@ function Product({
 														onPress={onReconnect}
 													/>
 												)}
-												<AccountSignOut onSignOut={onSignOut} />
+												<SettingsRow
+													label='抖音账号连接'
+													value={
+														douyinState.status === 'authenticated'
+															? douyinState.nickname || '已连接'
+															: '未登录'
+													}
+													onPress={() => setDouyinLoginOpen(true)}
+												/>
+												{onRequestBilibiliLogin && (
+													<SettingsRow
+														label='登录 B 站账号（可选）'
+														detail='当前为免登录模式；登录后可播放 B 站在线音源'
+														onPress={onRequestBilibiliLogin}
+													/>
+												)}
+												{onSignOut && <AccountSignOut onSignOut={onSignOut} />}
 												<AuthorSupportEntry />
 											</SettingsGroup>
 											<T variant='caption'>
@@ -2426,6 +2707,31 @@ function Product({
 										onClose={closeSheet}
 										onNotice={setNotice}
 									/>
+								) : sheet === 'source' &&
+								  isDouyinAudioId(
+										player.track?.sourceId ?? player.track?.id ?? '',
+								  ) ? (
+									<View style={{ gap: 12 }}>
+										<T
+											size={18}
+											weight='600'
+										>
+											{player.track?.title || '抖音原声'}
+										</T>
+										<T>创作者 / 歌手：{player.track?.artist || '抖音原声'}</T>
+										<T muted>
+											来源：抖音原声，作品 ID{' '}
+											{(player.track?.sourceId ?? player.track?.id ?? '').slice(
+												7,
+											)}
+										</T>
+										<T muted>
+											时长：{time(player.duration || player.track?.duration || 0)}
+										</T>
+										<T muted>
+											已提取纯音频流后台播放，播放时自动从在线歌词库匹配并同步歌词。
+										</T>
+									</View>
 								) : sheet === 'source' ? (
 									<View style={{ gap: 12 }}>
 										<T
@@ -2577,6 +2883,25 @@ function Product({
 						if (!success)
 							throw new Error('离线播放未开始，请检查内容完整性后重试')
 					}}
+				/>
+				<DouyinLoginModal
+					visible={douyinLoginOpen}
+					onClose={() => setDouyinLoginOpen(false)}
+					onNotice={setNotice}
+				/>
+				<DouyinCollectionModal
+					visible={douyinCollectionKind !== null}
+					kind={douyinCollectionKind}
+					likedIds={musicLikedIds}
+					playbackBusy={player.switching || !!listening.pendingBvid}
+					currentSourceId={player.track?.sourceId ?? player.track?.id ?? null}
+					onClose={() => setDouyinCollectionKind(null)}
+					onOpenLogin={() => setDouyinLoginOpen(true)}
+					onPlayQueue={(items, startId) => {
+						void playDouyinQueue(items, startId)
+					}}
+					onToggleLike={toggleLikeDouyin}
+					onAddToPlaylist={addDouyinToPlaylist}
 				/>
 				{!!notice && (
 					<View

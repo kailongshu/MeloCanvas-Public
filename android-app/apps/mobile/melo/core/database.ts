@@ -1,6 +1,9 @@
+import { DouyinAudioStore, isDouyinAudioId } from './douyin-audio'
 import { LocalAudioStore, isLocalAudioId } from './local-audio'
 import { sourceId, type Source } from './model'
 import {
+	douyinLibrarySource,
+	isDouyinLibrarySource,
 	localLibrarySource,
 	isLocalLibrarySource,
 	type MusicLibrarySource,
@@ -377,6 +380,32 @@ export const migrations = [
     DROP TABLE import_tasks;
     ALTER TABLE import_tasks_extended RENAME TO import_tasks;
     CREATE INDEX import_tasks_recent ON import_tasks(updatedAt DESC, taskId);`,
+	`CREATE TABLE playback_sources_v2 (
+        id TEXT PRIMARY KEY NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('bilibili', 'local', 'douyin'))
+    );
+    INSERT INTO playback_sources_v2 SELECT id, kind FROM playback_sources;
+    DROP TRIGGER IF EXISTS register_playback_source;
+    DROP TRIGGER IF EXISTS unregister_playback_source;
+    DROP TABLE playback_sources;
+    ALTER TABLE playback_sources_v2 RENAME TO playback_sources;
+    CREATE TRIGGER register_playback_source AFTER INSERT ON sources BEGIN
+        INSERT INTO playback_sources (id, kind) VALUES (NEW.id, 'bilibili');
+    END;
+    CREATE TRIGGER unregister_playback_source AFTER DELETE ON sources BEGIN
+        DELETE FROM playback_sources WHERE id = OLD.id;
+    END;
+    CREATE TABLE douyin_audio (
+        id TEXT PRIMARY KEY NOT NULL REFERENCES playback_sources(id),
+        awemeId TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+        artist TEXT NOT NULL,
+        artwork TEXT NOT NULL,
+        durationSeconds REAL NOT NULL CHECK(durationSeconds >= 0),
+        audioUrl TEXT NOT NULL DEFAULT '',
+        addedAt INTEGER NOT NULL CHECK(addedAt >= 0)
+    );
+    CREATE INDEX douyin_audio_recent ON douyin_audio(addedAt DESC);`,
 ] as const
 
 export function migrate(
@@ -392,7 +421,7 @@ export function migrate(
 	if (version === steps.length) return
 	// SQLite's documented table-rebuild procedure: disable outside the transaction,
 	// preserve child rows, check all references before commit, then restore enforcement.
-	const rebuildImports = steps.slice(version).some(step => step.includes('CREATE TABLE import_tasks_extended'))
+	const rebuildImports = steps.slice(version).some(step => step.includes('CREATE TABLE import_tasks_extended') || step.includes('CREATE TABLE playback_sources_v2'))
 	if (rebuildImports) db.execSync('PRAGMA foreign_keys = OFF')
 	try {
 		db.execSync('BEGIN IMMEDIATE')
@@ -453,11 +482,28 @@ export class Library {
 	}
 
 	getMusic(id: string): MusicLibrarySource | null {
+		if (isDouyinAudioId(id)) {
+			const audio = new DouyinAudioStore(this.db).get(id)
+			return audio ? douyinLibrarySource(audio) : null
+		}
 		if (!isLocalAudioId(id)) return this.get(id)
 		const audio = new LocalAudioStore(this.db).get(id)
 		return audio ? localLibrarySource(audio) : null
 	}
 	saveMusic(source: MusicLibrarySource): void {
+		if (isDouyinLibrarySource(source)) {
+			new DouyinAudioStore(this.db).upsert({
+				id: source.id,
+				awemeId: source.awemeId,
+				title: source.originalTitle,
+				artist: source.performer || source.uploader || '抖音原声',
+				artwork: source.artwork,
+				durationSeconds: source.duration,
+				audioUrl: source.audioUrl,
+				addedAt: source.addedAt || Date.now(),
+			})
+			return
+		}
 		if (!isLocalLibrarySource(source)) {
 			this.save(source)
 			return

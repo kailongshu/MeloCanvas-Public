@@ -101,6 +101,17 @@ class OrpheusAccountGateTest {
         assertFalse(OrpheusConfig.expireIfCurrent("fixture-account-a", oldGeneration))
         OrpheusConfig.requireAccountSession(newGeneration)
         assertThrows(IllegalStateException::class.java) { OrpheusConfig.captureAccountGeneration("fixture-account-b") }
+        OrpheusConfig.bilibiliCookie = null
+        OrpheusConfig.setGuestAccess(true)
+        assertTrue(OrpheusConfig.hasPlaybackAccess())
+        assertFalse(OrpheusConfig.hasAccountSession())
+        OrpheusConfig.requirePlaybackAccess()
+        assertThrows(IllegalStateException::class.java) { OrpheusConfig.requireAccountSession() }
+        val guestGen = OrpheusConfig.captureOnlineOrGuestGeneration(null)
+        assertTrue(OrpheusConfig.hasGuestAccess())
+        OrpheusConfig.requireOnlineOrGuestSession(guestGen)
+        OrpheusConfig.bilibiliCookie = "fixture-account-a"
+        assertThrows(IllegalStateException::class.java) { OrpheusConfig.requirePlaybackAccess(guestGen) }
     }
 
 }

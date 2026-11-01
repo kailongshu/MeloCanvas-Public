@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native'
 
 import type { Library } from './core/database'
+import { isDouyinAudioId } from './core/douyin-audio'
 import { isLocalAudioId } from './core/local-audio'
 import type { SearchItem, Source } from './core/model'
 import {
@@ -105,6 +106,9 @@ export function MusicPlayer({
 		? Math.max(260, Math.min(420, height * 0.42)) * Math.max(1, fontScale)
 		: coverSize
 	if (!player.track) return null
+	const douyinId = isDouyinAudioId(player.track.sourceId ?? '')
+		? player.track.sourceId
+		: null
 	const localId = isLocalAudioId(player.track.sourceId ?? '')
 		? player.track.sourceId
 		: null
@@ -140,7 +144,7 @@ export function MusicPlayer({
 				</View>
 				<MusicPlayerMenu
 					key={player.track.id}
-					local={!!localId}
+					local={!!(localId || douyinId)}
 					bvid={current?.bvid ?? ''}
 					fm={!!player.fmContext}
 					notifications={notifications}
@@ -169,7 +173,7 @@ export function MusicPlayer({
 					performer={
 						current && current.id === player.track.sourceId
 							? current.performer
-							: null
+							: (player.track.artist ?? null)
 					}
 					uploader={
 						current && current.id === player.track.sourceId
@@ -292,16 +296,16 @@ export function MusicPlayer({
 				<IconButton
 					name='heart'
 					label={
-						(localId ? localLiked : current && isLiked(current.bvid))
+						((localId ?? douyinId) ? localLiked : current && isLiked(current.bvid))
 							? '取消喜欢当前音源'
 							: '喜欢当前音源'
 					}
 					active={
-						localId ? localLiked : current ? isLiked(current.bvid) : false
+						(localId ?? douyinId) ? localLiked : current ? isLiked(current.bvid) : false
 					}
-					disabled={(localId ? !onLikeLocal : !current) || !!busyBv}
+					disabled={((localId ?? douyinId) ? !onLikeLocal : !current) || !!busyBv}
 					onPress={() => {
-						if (localId) onLikeLocal?.(localId)
+						if (localId ?? douyinId) onLikeLocal?.((localId ?? douyinId)!)
 						else if (current) onLike(current)
 					}}
 				/>
@@ -311,7 +315,7 @@ export function MusicPlayer({
 				size={11}
 				style={{ marginTop: 10 }}
 			>
-				{localId ? '本地音乐' : 'Bilibili'}
+				{localId ? '本地音乐' : douyinId ? '抖音原声' : 'Bilibili'}
 			</T>
 			<Progress
 				key={player.track.id}

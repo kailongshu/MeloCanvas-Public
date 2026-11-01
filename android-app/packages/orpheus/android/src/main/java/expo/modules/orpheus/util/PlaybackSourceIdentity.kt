@@ -6,13 +6,14 @@ object PlaybackSourceIdentity {
     fun isValidEntry(entryId: String, sourceId: String?, url: String, mode: String): Boolean {
         if (mode != "music" && mode != "listening") return false
         val source = sourceId ?: entryId
-        // Local files keep their real identity while saved playlists address occurrences.
+        // Local files and Douyin tracks keep their real identity while saved playlists address occurrences.
         val local = LocalAudioIdentity.isValid(source, url)
-        if (local && mode != "music") return false
-        if (!local && !isValid(source, url)) return false
+        val douyin = DouyinAudioIdentity.isValid(source, url)
+        if ((local || douyin) && mode != "music") return false
+        if (!local && !douyin && !isValid(source, url)) return false
         if (entryId == source) return true
         // A direct music occurrence keeps its original part ID across explicit P changes.
-        if (!local && mode == "music" && sourceId != null && sameBilibiliVideo(entryId, source)) return true
+        if (!local && !douyin && mode == "music" && sourceId != null && sameBilibiliVideo(entryId, source)) return true
         val itemId = entryId.removePrefix("playlist-item:")
         return mode == "music" && sourceId != null && entryId.startsWith("playlist-item:") &&
             itemId.isNotEmpty() && itemId.trim() == itemId

@@ -20,13 +20,20 @@ export const accountSession = new AccountSession({
 	verify: verifyAccount,
 	setNativeCookie: (cookie) => Orpheus.setBilibiliCookie(cookie),
 	setOfflineAccess: (enabled) => Orpheus.setBilibiliOfflineAccess(enabled),
+	setGuestAccess: (enabled) => Orpheus.setGuestPlaybackAccess(enabled),
 	pause: () => Orpheus.pauseForAccountGate(),
 	fetch: fetchNativeBilibili,
 })
 configureBilibiliAccountTransport({
-	fetch: (input, init) => accountSession.authorizedFetch(input, init),
+	fetch: (input, init) =>
+		accountSession.getSnapshot().status === 'guest'
+			? fetchNativeBilibili(input, init)
+			: accountSession.authorizedFetch(input, init),
 	generation: accountSession.getGeneration,
-	expired: () => accountSession.signOut('expired'),
+	expired: () =>
+		accountSession.getSnapshot().status === 'guest'
+			? Promise.resolve()
+			: accountSession.signOut('expired'),
 })
 
 export function watchNativeSessionExpiry(): () => void {

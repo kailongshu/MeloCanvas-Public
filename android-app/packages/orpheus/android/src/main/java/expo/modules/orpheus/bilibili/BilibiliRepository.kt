@@ -82,7 +82,7 @@ object BilibiliRepository {
         cookie: String?,
         onCall: (retrofit2.Call<*>) -> Unit = {},
     ): Pair<String, VolumeData?> {
-        val expectedGeneration = OrpheusConfig.captureAccountGeneration(cookie)
+        val expectedGeneration = OrpheusConfig.captureOnlineOrGuestGeneration(cookie)
         var cidInternal = cid
         val (imgKey, subKey) = getWbiKeys(onCall)
         if (cidInternal === null) {
@@ -103,7 +103,7 @@ object BilibiliRepository {
 
         val signedParams = WbiUtil.sign(rawParams, imgKey, subKey)
 
-        OrpheusConfig.requireAccountSession(expectedGeneration)
+        OrpheusConfig.requireOnlineOrGuestSession(expectedGeneration)
         val call = api.getPlayUrl(cookie, signedParams)
         onCall(call)
         val response = execute(call)
@@ -118,7 +118,7 @@ object BilibiliRepository {
             throw IOException("Bilibili API Error: code=${apiResponse?.code}")
         }
 
-        OrpheusConfig.requireAccountSession(expectedGeneration)
+        OrpheusConfig.requireOnlineOrGuestSession(expectedGeneration)
         if (apiResponse.data == null) {
             throw IOException("Bilibili API response data missing")
         }
@@ -133,9 +133,9 @@ object BilibiliRepository {
         bvid: String,
         cookie: String?,
         onCall: (retrofit2.Call<*>) -> Unit = {},
-        expectedGeneration: Long = OrpheusConfig.captureAccountGeneration(cookie),
+        expectedGeneration: Long = OrpheusConfig.captureOnlineOrGuestGeneration(cookie),
     ): Long {
-        OrpheusConfig.requireAccountSession(expectedGeneration)
+        OrpheusConfig.requireOnlineOrGuestSession(expectedGeneration)
         val call = api.getPageList(cookie = cookie, bvid = bvid)
         onCall(call)
         val response = execute(call)
@@ -150,7 +150,7 @@ object BilibiliRepository {
             throw IOException("Bilibili API Error: code=${apiResponse?.code}")
         }
 
-        OrpheusConfig.requireAccountSession(expectedGeneration)
+        OrpheusConfig.requireOnlineOrGuestSession(expectedGeneration)
         if (apiResponse.data == null) {
             throw IOException("Bilibili API response data missing")
         }

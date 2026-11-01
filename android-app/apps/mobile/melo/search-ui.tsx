@@ -33,7 +33,7 @@ import {
 
 export interface SearchPageProps {
 	query: string
-	filter: 'all' | 'music' | 'listening' | 'creator'
+	filter: 'all' | 'music' | 'listening' | 'creator' | 'douyin'
 	search: SearchState & Pick<SearchSession, 'retry' | 'loadMore' | 'setOrder'>
 	creatorSearch: {
 		state: CreatorSearchState
@@ -53,6 +53,7 @@ export interface SearchPageProps {
 	onSelectHistory?: (entry: SearchHistoryEntry) => void
 	onOpenCreator: (creator: Creator) => void
 	renderRow: (item: SearchItem, index: number) => React.ReactNode
+	douyinContent?: React.ReactNode
 }
 
 /** Presentation only. App retains both searches, their lifecycles and submission ownership. */
@@ -68,6 +69,7 @@ export function SearchPage({
 	history,
 	onSelectHistory,
 	renderRow,
+	douyinContent,
 }: SearchPageProps) {
 	const theme = useTheme()
 	const rendering = useThemeRendering()
@@ -104,7 +106,9 @@ export function SearchPage({
 						? 'UP 昵称 / mid:123 / UP 主页链接'
 						: filter === 'listening'
 							? '视频标题 / UP 主 / BV 号'
-							: '歌曲关键词 / BV 号'
+							: filter === 'douyin'
+								? '抖音关键词 / 粘贴抖音分享口令或短链'
+								: '歌曲关键词 / BV 号 / 抖音分享链接'
 				}
 			/>
 			<ScrollView
@@ -113,7 +117,7 @@ export function SearchPage({
 				contentContainerStyle={[s.row, { gap: 4 }]}
 				style={{ marginVertical: 10 }}
 			>
-				{(['all', 'music', 'listening', 'creator'] as const).map((value) => {
+				{(['all', 'music', 'douyin', 'listening', 'creator'] as const).map((value) => {
 					const tab = (
 						<ControlTarget
 							key={value}
@@ -139,7 +143,9 @@ export function SearchPage({
 										? '音乐分区'
 										: value === 'listening'
 											? '听视频'
-											: 'UP 主'}
+											: value === 'douyin'
+												? '抖音原声'
+												: 'UP 主'}
 							</T>
 						</ControlTarget>
 					)
@@ -232,8 +238,9 @@ export function SearchPage({
 								music: '音乐分区',
 								listening: '听视频',
 								creator: 'UP 主',
+								douyin: '抖音原声',
 							}[entry.kind]
-							const label = `${entry.query}，${kindLabel}${entry.kind !== 'creator' && entry.order === 'published' ? '，最新' : ''}`
+							const label = `${entry.query}，${kindLabel}${entry.kind !== 'creator' && entry.kind !== 'douyin' && entry.order === 'published' ? '，最新' : ''}`
 							const chip = (
 								<ControlTarget
 									key={JSON.stringify(entry)}
@@ -273,7 +280,7 @@ export function SearchPage({
 					</ScrollView>
 				</View>
 			)}
-			{filter !== 'creator' && !!submitted && canSortSearch(submitted) && (
+			{filter !== 'creator' && filter !== 'douyin' && !!submitted && canSortSearch(submitted) && (
 				<View
 					testID='search-order-controls'
 					style={{
@@ -335,7 +342,9 @@ export function SearchPage({
 						/>
 					</View>
 				)}
-			{filter === 'creator' ? (
+			{filter === 'douyin' ? (
+				(douyinContent ?? null)
+			) : filter === 'creator' ? (
 				<CreatorSearchResults
 					state={creatorSearch.state}
 					session={creatorSearch.session}

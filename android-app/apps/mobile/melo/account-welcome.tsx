@@ -60,6 +60,7 @@ export interface AccountWelcomeProps {
 	onRetry: () => void
 	onClear: () => void
 	onExit: () => void
+	onSkip?: () => void
 	onQrError: () => void
 	onContentWidth: (width: number) => void
 }
@@ -386,6 +387,16 @@ export function AccountWelcome(props: AccountWelcomeProps) {
 									)}
 									{consentControl}
 									{!props.qr && generateControl}
+									{props.onSkip && (
+										<Button
+											secondary
+											testID='account-login-skip'
+											disabled={props.busy}
+											onPress={props.onSkip}
+										>
+											暂不登录 B 站，直接进入音绘
+										</Button>
+									)}
 									{message && !props.qr && (
 										<View accessibilityLiveRegion='polite'>
 											<T size={13}>{message}</T>
@@ -433,7 +444,7 @@ export function AccountWelcome(props: AccountWelcomeProps) {
 								muted
 								size={12}
 							>
-								首次使用需要登录。绑定后，完整下载的歌曲也能离线收听。
+								可选绑定 B 站账号；不登录 B 站也可直接使用抖音原声、在线歌词与本地音乐。
 							</T>
 							<View style={s.footer}>
 								<View style={s.footerRow}>

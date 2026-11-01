@@ -7,6 +7,7 @@ import React, {
 	useState,
 	useSyncExternalStore,
 } from 'react'
+import { Orpheus } from '@bbplayer/orpheus'
 import { BackHandler, Modal, ScrollView, TextInput, View } from 'react-native'
 
 import { getAccountAccess, useAccountAccess } from './account-access'
@@ -36,6 +37,91 @@ import { lyricCandidateEvidence, lyricSearchTitle, rankLyricCandidates } from '.
 import { PageHeader, SettingsGroup, SettingsRow } from './settings-layout'
 import { Button, ControlTarget, T, useTheme, useThemeRendering } from './ui'
 import type { PlaybackProgress } from './playback-progress'
+
+export function pushSavedLyricsToNative(saved: SavedLyrics | null): void {
+	try {
+		if (!saved) {
+			void Orpheus.clearOverlays().catch(() => {})
+			return
+		}
+		const parsed = savedLyricsParsed(saved)
+		if (!parsed.timed) return
+		const adjustmentSeconds = (saved.offsetMs - parsed.fileOffsetMs) / 1000
+		void Orpheus.setLyrics({
+			lyrics: parsed.lines
+				.filter((line) => line.atMs !== null)
+				.map((line) => ({
+					timestamp: Math.max(0, line.atMs! / 1000 + adjustmentSeconds),
+					endTime:
+						line.endMs !== undefined && line.endMs !== null
+							? Math.max(0, line.endMs / 1000 + adjustmentSeconds)
+							: undefined,
+					text: line.text,
+					translation: line.translation,
+					romaji: line.romaji,
+				})),
+			offset: 0,
+		}).catch(() => {})
+	} catch {
+		/* Best-effort sync to native floating/status-bar/car lyrics. */
+	}
+}
+
+export function useAutoSyncTrackLyrics(
+	library: Pick<Library, 'setting' | 'setSetting'>,
+	track: {
+		id: string
+		sourceId?: string
+		title?: string
+		artist?: string
+		duration?: number
+	} | null,
+): void {
+	const { onlineAllowed } = useAccountAccess()
+	const store = useMemo(() => new LyricsStore(library), [library])
+	const sourceId = track?.sourceId ?? track?.id ?? ''
+	const title = track?.title ?? ''
+	const artist = track?.artist ?? ''
+	const duration = track?.duration ?? 0
+
+	useEffect(() => {
+		if (!sourceId || !lyricsIdentity(sourceId)) return
+		let existing: SavedLyrics | null = null
+		try {
+			existing = store.get(sourceId)
+		} catch {
+			existing = null
+		}
+		if (existing) {
+			pushSavedLyricsToNative(existing)
+			return
+		}
+		void Orpheus.clearOverlays().catch(() => {})
+		if (!onlineAllowed || !title.trim()) return
+
+		const controller = new AbortController()
+		void onlineLyricsService
+			.match(
+				{
+					sourceId,
+					title,
+					performer: artist ? artist.replace(/^UP · /, '') : null,
+					durationSeconds: duration,
+				},
+				{ signal: controller.signal },
+			)
+			.then((result) => {
+				if (controller.signal.aborted || result.sourceId !== sourceId) return
+				const cached = cacheOnlineLyrics(result)
+				store.save(cached)
+				pushSavedLyricsToNative(cached)
+			})
+			.catch(() => {
+				/* Ignore background auto-match miss; user can search manually in LyricsReader. */
+			})
+		return () => controller.abort()
+	}, [store, sourceId, title, artist, duration, onlineAllowed])
+}
 
 const noProgressSubscription = () => () => {}
 
@@ -283,6 +369,9 @@ export function LyricsReader({
 		[saved],
 	)
 	const lyricOffset = saved?.offsetMs ?? 0
+	useEffect(() => {
+		if (saved) pushSavedLyricsToNative(saved)
+	}, [saved])
 	const activeSnapshot = useCallback(
 		() => parsed
 			? activeLyric(parsed, (progress?.getSnapshot().position ?? fallbackPosition) * 1000, lyricOffset)

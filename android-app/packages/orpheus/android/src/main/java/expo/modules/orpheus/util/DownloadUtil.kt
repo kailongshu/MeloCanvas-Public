@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.offline.DownloadNotificationHelper
 import androidx.media3.exoplayer.scheduler.Requirements
 import expo.modules.orpheus.OrpheusConfig
 import expo.modules.orpheus.bilibili.BilibiliRepository
+import expo.modules.orpheus.douyin.DouyinManager
 import expo.modules.orpheus.manager.DownloadCache
 import expo.modules.orpheus.service.OrpheusDownloadService
 import java.io.IOException
@@ -127,7 +128,7 @@ object DownloadUtil {
         var lease: PlaybackNetworkGate.Lease? = null
         fun network(): PlaybackNetworkGate.Lease = checkNotNull(lease)
         val calls = okhttp3.Call.Factory { request ->
-            OrpheusConfig.requireAccountSession()
+            OrpheusConfig.requirePlaybackAccess()
             network().check()
             expo.modules.orpheus.network.OkHttpClientManager.okHttpClient.newCall(request).also { call ->
                 network().register { call.cancel() }
@@ -139,14 +140,14 @@ object DownloadUtil {
         ).createDataSource()
         object : DataSource by upstream {
             override fun open(dataSpec: DataSpec): Long {
-                OrpheusConfig.requireAccountSession()
+                OrpheusConfig.requirePlaybackAccess()
                 lease = PlaybackNetworkPolicy.begin(ownerEpoch)
                 return try { upstream.open(dataSpec) } catch (error: Exception) {
                     lease?.close(); lease = null; throw error
                 }
             }
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                OrpheusConfig.requireAccountSession()
+                OrpheusConfig.requirePlaybackAccess()
                 network().check()
                 return upstream.read(buffer, offset, length)
             }
@@ -194,9 +195,28 @@ object DownloadUtil {
         override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
             network?.invoke()?.check()
             val uri = dataSpec.uri
+            if (uri.scheme == "orpheus" && uri.host == "douyin") {
+                try {
+                    val awemeId = DouyinAudioIdentity.idFromUri(uri.toString())
+                        ?: throw IOException("Invalid Douyin audio URI")
+                    val realUrl = DouyinManager.resolveAudioStreamUrl(awemeId)
+                    val headers = HashMap<String, String>()
+                    headers["Referer"] = "https://www.douyin.com/"
+                    headers["User-Agent"] = DouyinManager.DESKTOP_UA
+                    return dataSpec.buildUpon()
+                        .setUri(realUrl.toUri())
+                        .setHttpRequestHeaders(headers)
+                        .setKey(uri.toString())
+                        .build()
+                } catch (e: IOException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw IOException("Douyin audio resolution failed: ${e.message}")
+                }
+            }
             if (uri.scheme == "orpheus" && uri.host == "bilibili") {
                 try {
-                    OrpheusConfig.requireAccountSession()
+                    OrpheusConfig.requireOnlineOrGuestSession()
                     val bvid = uri.getQueryParameter("bvid")
                     val cid = uri.getQueryParameter("cid")?.toLongOrNull()
                     val quality = uri.getQueryParameter("quality")?.toIntOrNull() ?: 30280

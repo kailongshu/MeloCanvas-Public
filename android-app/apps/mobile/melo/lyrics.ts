@@ -1,4 +1,5 @@
 import type { Library } from './core/database'
+import { isDouyinAudioId } from './core/douyin-audio'
 import { isLocalAudioId } from './core/local-audio'
 import { loadedLyricVersionText } from './online-lyrics-ranking'
 
@@ -85,7 +86,7 @@ export interface SavedLyrics {
 }
 export function lyricsIdentity(id: string | undefined): string | null {
 	return id &&
-		(isLocalAudioId(id) || /^bilibili:BV[0-9A-Za-z]{10}:[1-9]\d*$/.test(id))
+		(isLocalAudioId(id) || isDouyinAudioId(id) || /^bilibili:BV[0-9A-Za-z]{10}:[1-9]\d*$/.test(id))
 		? id
 		: null
 }

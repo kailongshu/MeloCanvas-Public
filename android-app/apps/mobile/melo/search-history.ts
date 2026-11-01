@@ -1,6 +1,6 @@
 import type { SearchOrder } from './search-order'
 
-export type SearchHistoryKind = 'all' | 'music' | 'listening' | 'creator'
+export type SearchHistoryKind = 'all' | 'music' | 'listening' | 'creator' | 'douyin'
 export interface SearchHistoryEntry {
 	query: string
 	kind: SearchHistoryKind
@@ -17,6 +17,7 @@ const kinds = new Set<SearchHistoryKind>([
 	'music',
 	'listening',
 	'creator',
+	'douyin',
 ])
 function valid(value: unknown): value is SearchHistoryEntry {
 	if (!value || typeof value !== 'object') return false

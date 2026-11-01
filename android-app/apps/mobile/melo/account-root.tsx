@@ -32,7 +32,7 @@ function waitForForeground(signal: AbortSignal): Promise<void> {
 	})
 }
 
-/** The child app is not mounted until SecureStore and the Bilibili identity are verified. */
+/** Supports direct guest startup without mandatory Bilibili login, plus optional Bilibili QR login. */
 export default function AccountRoot() {
 	const appearance = useAppearance()
 	const themeKey = useSyncExternalStore(
@@ -50,6 +50,7 @@ export default function AccountRoot() {
 		accountSession.subscribe,
 		accountSession.getSnapshot,
 	)
+	const [bilibiliLoginOpen, setBilibiliLoginOpen] = useState(false)
 	const [consent, setConsent] = useState(false)
 	const [qr, setQr] = useState('')
 	const [message, setMessage] = useState('')
@@ -70,6 +71,17 @@ export default function AccountRoot() {
 		setBusy(false)
 		setMessage('')
 	}
+	const skipToApp = () => {
+		cancel()
+		setBilibiliLoginOpen(false)
+		if (
+			state.status !== 'authenticated' &&
+			state.status !== 'offline' &&
+			state.status !== 'guest'
+		) {
+			accountSession.enterGuest()
+		}
+	}
 	useEffect(() => {
 		const requests = active
 		const version = requestVersion
@@ -88,6 +100,14 @@ export default function AccountRoot() {
 		})
 		return () => subscription.remove()
 	}, [])
+	useEffect(() => {
+		if (!bilibiliLoginOpen) return
+		const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+			skipToApp()
+			return true
+		})
+		return () => sub.remove()
+	}, [bilibiliLoginOpen, state.status])
 	async function login() {
 		cancel()
 		const version = requestVersion.current
@@ -128,8 +148,6 @@ export default function AccountRoot() {
 					result = await pollLoginQr(code.key, controller.signal)
 				} catch (error) {
 					if (!current()) return
-					// A background network interruption can be retried with the
-					// same key after return; normal foreground errors stay visible.
 					if (pollInterrupted.current) continue
 					throw error
 				}
@@ -141,6 +159,7 @@ export default function AccountRoot() {
 					await accountSession.login(result.cookie, controller.signal)
 					if (!current()) return
 					setMessage('')
+					setBilibiliLoginOpen(false)
 					return
 				}
 				if (result.status === 'expired') {
@@ -188,10 +207,15 @@ export default function AccountRoot() {
 		return (
 			<StartupSurface
 				mode={appearance.ready ? appearance.mode : 'dark'}
-				label={state.status === 'checking' ? '正在验证账号' : '正在启动'}
+				label={state.status === 'checking' ? '正在准备音绘' : '正在启动'}
 			/>
 		)
-	if (state.status === 'authenticated' || state.status === 'offline')
+	if (
+		!bilibiliLoginOpen &&
+		(state.status === 'authenticated' ||
+			state.status === 'offline' ||
+			state.status === 'guest')
+	)
 		return (
 			<AppearanceSurface mode={appearance.mode}>
 				<App
@@ -200,7 +224,16 @@ export default function AccountRoot() {
 					accountName={
 						state.status === 'offline'
 							? '已绑定账号（离线）'
-							: state.account?.name
+							: state.status === 'guest'
+								? '未登录 B 站（免登录模式）'
+								: state.account?.name
+					}
+					onRequestBilibiliLogin={
+						state.status === 'guest'
+							? () => {
+									setBilibiliLoginOpen(true)
+								}
+							: undefined
 					}
 					onReconnect={
 						state.status === 'offline'
@@ -209,11 +242,16 @@ export default function AccountRoot() {
 								}
 							: undefined
 					}
-					onSignOut={() => {
-						cancel()
-						setConsent(false)
-						void accountSession.signOut().catch(() => {})
-					}}
+					onSignOut={
+						state.status === 'authenticated' || state.status === 'offline'
+							? () => {
+									cancel()
+									setConsent(false)
+									setBilibiliLoginOpen(false)
+									void accountSession.signOut().catch(() => {})
+								}
+							: undefined
+					}
 				/>
 			</AppearanceSurface>
 		)
@@ -255,12 +293,16 @@ export default function AccountRoot() {
 					cancel()
 					void accountSession.signOut().catch(() => {})
 				}}
+				onSkip={skipToApp}
 				onExit={() => {
+					if (bilibiliLoginOpen) {
+						skipToApp()
+						return
+					}
 					cancel()
 					BackHandler.exitApp()
 				}}
 				onQrError={() => {
-					// Defer the state update because the QR library calls onError while rendering.
 					const version = requestVersion.current
 					void Promise.resolve().then(() => {
 						if (version !== requestVersion.current) return

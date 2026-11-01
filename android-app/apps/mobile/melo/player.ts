@@ -15,6 +15,7 @@ import type {
 	PlaybackMode,
 	ResumePoint,
 } from './core/listening'
+import type { DouyinAudio, DouyinAudioStore } from './core/douyin-audio'
 import type { LocalAudioStore } from './core/local-audio'
 import { playbackError, type Source } from './core/model'
 import type { MusicLibrarySource } from './core/music-library-source'
@@ -27,11 +28,12 @@ export function usePlayer(
 	listening: ListeningLibrary,
 	sessions: SessionStore,
 	localAudio?: LocalAudioStore,
+	douyinAudio?: DouyinAudioStore,
 ) {
 	const controller = useMemo(
 		() =>
-			new PlaybackController(Orpheus, library, listening, sessions, localAudio),
-		[library, listening, sessions, localAudio],
+			new PlaybackController(Orpheus, library, listening, sessions, localAudio, douyinAudio),
+		[library, listening, sessions, localAudio, douyinAudio],
 	)
 	const [track, setTrack] = useState<Track | null>(null)
 	const [queue, setQueue] = useState<Track[]>([])
@@ -543,6 +545,15 @@ export function usePlayer(
 			),
 		playLocalAudio: (id: string, preparation: PlaybackPreparation) =>
 			operation(() => controller.playLocalAudio(id, preparation), preparation),
+		playDouyinAudio: (
+			items: DouyinAudio[],
+			startId: string,
+			preparation: PlaybackPreparation,
+		) =>
+			operation(
+				() => controller.playDouyinAudio(items, startId, preparation),
+				preparation,
+			),
 		playPlaylist: (
 			entries: { itemId: string; source: MusicLibrarySource }[],
 			startItemId: string,

@@ -56,20 +56,13 @@ export function useSearchInteractions() {
 						createIt.error,
 						'UI.Playlist.Remote',
 					)
+					reportErrorToSentry(
+						createIt.error,
+						'将 track 录入本地失败',
+						'UI.Playlist.Remote',
+					)
+					return
 				}
-			}
-			if (createIt.isErr()) {
-				toastAndLogError(
-					'将 track 录入本地失败',
-					createIt.error,
-					'UI.Playlist.Remote',
-				)
-				reportErrorToSentry(
-					createIt.error,
-					'将 track 录入本地失败',
-					'UI.Playlist.Remote',
-				)
-				return
 			}
 			const added = await addToQueue({
 				tracks: [track],

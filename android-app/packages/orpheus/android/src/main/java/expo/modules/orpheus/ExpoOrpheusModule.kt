@@ -30,6 +30,7 @@ import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.typedarray.Float32Array
+import expo.modules.orpheus.douyin.DouyinManager
 import expo.modules.orpheus.network.BilibiliAccountRequest
 import expo.modules.orpheus.util.DirectoryPickerContract
 import expo.modules.orpheus.exception.ControllerNotInitializedException
@@ -511,6 +512,47 @@ class ExpoOrpheusModule : Module() {
         }
 
         Function("getBilibiliSessionGeneration") { OrpheusConfig.accountGeneration() }
+
+        Function("setGuestPlaybackAccess") { enabled: Boolean ->
+            val previous = OrpheusConfig.accountGeneration()
+            OrpheusConfig.setGuestAccess(enabled)
+            if (previous != OrpheusConfig.accountGeneration()) {
+                playbackReplacement.cancel()
+                OfflineDownloadPolicy.cancelAccountWork()
+                OrpheusMusicService.instance?.onAccountSessionChanged()
+            }
+        }
+
+        AsyncFunction("openDouyinLogin") Coroutine { ->
+            val activity = appContext.currentActivity
+                ?: appContext.activityProvider?.currentActivity
+                ?: throw IllegalStateException("当前界面未就绪，请稍后重试")
+            DouyinManager.openLoginDialog(activity)
+        }
+
+        Function("setDouyinCookie") { cookie: String ->
+            DouyinManager.setCookie(cookie)
+        }
+
+        Function("clearDouyinCookie") {
+            DouyinManager.clearCookie()
+        }
+
+        AsyncFunction("douyinApiRequest") Coroutine { endpoint: String ->
+            val context = cachedAppContext ?: appContext.reactContext
+                ?: throw IllegalStateException("应用上下文不可用")
+            DouyinManager.apiRequest(context, endpoint)
+        }
+
+        AsyncFunction("douyinResolveShare") Coroutine { textOrUrl: String ->
+            val context = cachedAppContext ?: appContext.reactContext
+                ?: throw IllegalStateException("应用上下文不可用")
+            DouyinManager.resolveShare(context, textOrUrl)
+        }
+
+        Function("douyinRegisterStreams") { streamsJson: String ->
+            DouyinManager.registerStreamsJson(streamsJson)
+        }
 
         AsyncFunction("bilibiliSubtitleRequest") Coroutine { url: String ->
             withContext(Dispatchers.IO) { BilibiliAccountRequest.subtitle(url) }

@@ -22,6 +22,7 @@ class OfflinePlaybackRouteTest {
         assertNull(OfflinePlaybackRoute.cacheKey(uri, true, true, mustNotReadCache))
         val local = LocalAudioIdentity.uri("123e4567-e89b-42d3-a456-426614174000")
         assertNull(OfflinePlaybackRoute.cacheKey(local, true, false, mustNotReadCache))
+        assertNull(OfflinePlaybackRoute.cacheKey(DouyinAudioIdentity.uri("7351234567890123456"), true, false, mustNotReadCache))
     }
 
     @Test fun logoutCannotSelectEitherCacheOnlyRoute() {

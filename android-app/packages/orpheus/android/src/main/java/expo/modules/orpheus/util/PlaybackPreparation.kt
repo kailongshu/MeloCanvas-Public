@@ -1,11 +1,12 @@
 package expo.modules.orpheus.util
 
 import android.content.Context
+import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
-import android.net.Uri
 import expo.modules.orpheus.OrpheusConfig
 import expo.modules.orpheus.bilibili.BilibiliRepository
+import expo.modules.orpheus.douyin.DouyinManager
 import expo.modules.orpheus.network.OkHttpClientManager
 import okhttp3.Request
 import java.io.IOException
@@ -26,11 +27,27 @@ object PlaybackPreparation {
             check(guard.isCurrent(token)) { "PlaybackReplacementCancelled" }
             return
         }
+        DouyinAudioIdentity.idFromUri(uri)?.let { awemeId ->
+            PlaybackNetworkPolicy.initialize(context)
+            if (DownloadUtil.hasCompletePlaybackCache(context, uri)) return
+            val network = PlaybackNetworkPolicy.begin()
+            guard.onFinished(token) { network.close() }
+            try {
+                network.register { guard.cancelIfCurrent(token) }
+                DouyinManager.resolveAudioStreamUrl(awemeId)
+                check(guard.isCurrent(token)) { "PlaybackReplacementCancelled" }
+                network.check()
+                return
+            } catch (error: Exception) {
+                network.close()
+                throw error
+            }
+        }
         if (OfflinePlaybackDataSource.check(context, uri)) {
             check(guard.isCurrent(token)) { "PlaybackReplacementCancelled" }
             return
         }
-        OrpheusConfig.requireAccountSession()
+        OrpheusConfig.requireOnlineOrGuestSession()
         val source = Uri.parse(uri)
         require(source.scheme == "orpheus" && source.host == "bilibili") { "Expected stable Bilibili source URI" }
         val bvid = requireNotNull(source.getQueryParameter("bvid"))

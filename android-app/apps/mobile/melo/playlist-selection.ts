@@ -1,5 +1,6 @@
 import type { Library } from './core/database'
 import {
+	isDouyinLibrarySource,
 	isLocalLibrarySource,
 	type MusicLibrarySource as Source,
 } from './core/music-library-source'
@@ -25,6 +26,7 @@ function playlistSourceSearchText(source: Source): string {
 		source.performer,
 		source.uploader,
 		source.bvid,
+		isDouyinLibrarySource(source) ? source.awemeId : null,
 		isLocalLibrarySource(source)
 			? source.originalName.split(/[\\/]/).pop()
 			: null,
@@ -105,6 +107,8 @@ export function playlistItemDescription(
 			subtitle: source
 				? isLocalLibrarySource(source)
 					? `本地音频，${source.performer || '未知艺术家'}`
+					: isDouyinLibrarySource(source)
+						? `抖音原声 · ${source.performer || source.uploader || '未知艺术家'}`
 					: `UP：${source.uploader}`
 				: '条目已保留，可稍后重试',
 			status: null,

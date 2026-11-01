@@ -3,6 +3,7 @@ import { validateSavedLyrics, lyricsStoragePrefix } from '../lyrics'
 import type { Database } from './database'
 import type { ImportDirectorySnapshot, ImportReview } from './import-types'
 import { directory, reviewValue } from './import-validation'
+import { isDouyinAudioId } from './douyin-audio'
 import { isLocalAudioId } from './local-audio'
 import { parseMusicPreferences } from './music-preferences'
 import { playlistItemFromRow, type PlaylistItemRow } from './playlist-import'
@@ -23,6 +24,7 @@ const columns = {
 	creator_subscriptions:
 		'profileId,creatorMid,scope,createdAt,notifications,origin',
 	local_audio: 'id,originalName,title,artist,durationSeconds,bytes,importedAt',
+	douyin_audio: 'id,awemeId,title,artist,artwork,durationSeconds,addedAt',
 	resume_points: 'sourceId,positionSeconds,durationSeconds,completed,updatedAt',
 	likes: 'sourceId,likedAt',
 	playlists: 'id,name,createdAt,updatedAt,description,coverUri',
@@ -160,6 +162,8 @@ export function parseLibraryBackup(text: string): LibraryBackup {
 		!record(value.tables)
 	)
 		fail()
+	if (!Object.hasOwn(value.tables, 'douyin_audio'))
+		(value.tables as Record<string, unknown>).douyin_audio = []
 	exact(value.tables, tableNames)
 	let rowCount = 0
 	for (const table of tableNames) {
@@ -297,6 +301,19 @@ export function parseLibraryBackup(text: string): LibraryBackup {
 			fail()
 		ids.add(row.id)
 	}
+	for (const row of backup.tables.douyin_audio) {
+		if (
+			typeof row.id !== 'string' ||
+			typeof row.awemeId !== 'string' ||
+			!isDouyinAudioId(row.id) ||
+			row.id !== `douyin:${row.awemeId}` ||
+			typeof row.title !== 'string' ||
+			!row.title.trim() ||
+			ids.has(row.id)
+		)
+			fail()
+		ids.add(row.id)
+	}
 	for (const row of backup.tables.settings) {
 		// Never copy the settings table wholesale: theme registries and future auth settings are excluded.
 		if (typeof row.value !== 'string') fail()
@@ -317,7 +334,7 @@ export function parseLibraryBackup(text: string): LibraryBackup {
 					typeof item.query !== 'string' ||
 					!item.query.trim() ||
 					item.query.length > 4096 ||
-					!['all', 'music', 'listening', 'creator'].includes(
+					!['all', 'music', 'listening', 'creator', 'douyin'].includes(
 						String(item.kind),
 					) ||
 					!['relevance', 'published'].includes(String(item.order))
@@ -522,6 +539,12 @@ export function stageLibraryBackup(
 						"INSERT INTO playback_sources(id,kind) VALUES (?, 'local')",
 						[row.id],
 					)
+			if (table === 'douyin_audio')
+				for (const row of backup.tables.douyin_audio)
+					db.runSync(
+						"INSERT INTO playback_sources(id,kind) VALUES (?, 'douyin')",
+						[row.id],
+					)
 			const names = columns[table].split(',')
 			for (const row of backup.tables[table])
 				db.runSync(
@@ -545,6 +568,7 @@ export function stageLibraryBackup(
 const primaryKeys: Record<BackupTable, string[]> = {
 	sources: ['id'],
 	local_audio: ['id'],
+	douyin_audio: ['id'],
 	creators: ['mid'],
 	creator_subscriptions: ['profileId', 'creatorMid'],
 	resume_points: ['sourceId'],
@@ -715,6 +739,11 @@ export function mergeLibraryBackup(
 					)
 					row.position = (last?.position ?? -1) + 1
 				}
+				if (table === 'douyin_audio')
+					db.runSync(
+						"INSERT OR IGNORE INTO playback_sources(id,kind) VALUES (?, 'douyin')",
+						[row.id],
+					)
 				if (table === 'local_audio')
 					db.runSync(
 						"INSERT INTO playback_sources(id,kind) VALUES (?, 'local')",
@@ -750,7 +779,7 @@ function writeReplacement(
 ): void {
 	for (let index = tableNames.length - 1; index >= 0; index--) {
 		const table = tableNames[index]
-		if (table === 'sources' || table === 'local_audio') continue
+		if (table === 'sources' || table === 'local_audio' || table === 'douyin_audio') continue
 		if (table === 'settings')
 			db.runSync(
 				"DELETE FROM settings WHERE key IN ('reducedMotion','theme','theme.state.v1','searchHistory.v1','music.preferences.v1') OR key LIKE 'melo.lyrics.v1:%'",
@@ -763,13 +792,18 @@ function writeReplacement(
 		for (const original of backup.tables[table]) {
 			const row = { ...original }
 			if (
-				(table === 'sources' || table === 'local_audio') &&
+				(table === 'sources' || table === 'local_audio' || table === 'douyin_audio') &&
 				db.getFirstSync(`SELECT id FROM ${table} WHERE id = ?`, [row.id])
 			)
 				continue
 			if (table === 'local_audio')
 				db.runSync(
 					"INSERT OR IGNORE INTO playback_sources(id,kind) VALUES (?, 'local')",
+					[row.id],
+				)
+			if (table === 'douyin_audio')
+				db.runSync(
+					"INSERT OR IGNORE INTO playback_sources(id,kind) VALUES (?, 'douyin')",
 					[row.id],
 				)
 			if (table === 'playlists' && typeof row.coverUri === 'string')

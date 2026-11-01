@@ -71,5 +71,11 @@ class PlaybackSourceIdentityTest {
         assertFalse(PlaybackSourceIdentity.isValid("bilibili:BV1vT411i7ET:124", "orpheus://bilibili?bvid=BV1vT411i7ET&cid=123&cid=124"))
         assertFalse(PlaybackSourceIdentity.isValid("bilibili:BV1vT411i7ET:123", "orpheus://bilibili?bvid=BV1vT411i7ET&bvid=BV1vT411i7ET&cid=123"))
         assertFalse(PlaybackSourceIdentity.isValid("bilibili:BV1vT411i7ET:123", "orpheus://bilibili?bvid=BV1vT411i7ET&cid=123&quality=30232&quality=30280"))
+        val douyinSource = DouyinAudioIdentity.sourceId("7351234567890123456")
+        val douyinUri = DouyinAudioIdentity.uri("7351234567890123456")
+        assertTrue(PlaybackSourceIdentity.isValidEntry(douyinSource, null, douyinUri, "music"))
+        assertTrue(PlaybackSourceIdentity.isValidEntry("playlist-item:d1", douyinSource, douyinUri, "music"))
+        assertFalse(PlaybackSourceIdentity.isValidEntry(douyinSource, douyinSource, douyinUri, "listening"))
+        assertFalse(PlaybackSourceIdentity.isValidEntry("playlist-item:d1", douyinSource, "https://cdn.example/video.mp4", "music"))
     }
 }

@@ -13,7 +13,10 @@ internal object OfflinePlaybackRoute {
         hasAccountSession: Boolean,
         complete: (String) -> Boolean,
     ): String? {
-        if (!hasPlaybackAccess || LocalAudioIdentity.idFromUri(uri) != null) return null
+        if (!hasPlaybackAccess ||
+            LocalAudioIdentity.idFromUri(uri) != null ||
+            DouyinAudioIdentity.idFromUri(uri) != null
+        ) return null
         val explicit = uri.endsWith(SUFFIX)
         if (!explicit && hasAccountSession) return null
         val key = uri.removeSuffix(SUFFIX)

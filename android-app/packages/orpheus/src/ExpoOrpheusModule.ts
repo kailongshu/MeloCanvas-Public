@@ -384,6 +384,13 @@ declare class NativeOrpheusModule extends NativeModule<OrpheusEvents> {
 	getAdjacentTracks(): Promise<{ previous: Track | null; next: Track | null }>
 	/** 保存原生 Bilibili 网络请求使用的 Cookie。 */
 	setBilibiliOfflineAccess(enabled: boolean): void
+	setGuestPlaybackAccess(enabled: boolean): void
+	openDouyinLogin(): Promise<string>
+	setDouyinCookie(cookie: string): void
+	clearDouyinCookie(): void
+	douyinApiRequest(endpoint: string): Promise<string>
+	douyinResolveShare(textOrUrl: string): Promise<string>
+	douyinRegisterStreams(streamsJson: string): void
 	pauseForAccountGate(): Promise<void>
 	getBilibiliSessionGeneration(): number
 	/** Allowlisted subtitle CDN GET only; no account credentials or redirects. */

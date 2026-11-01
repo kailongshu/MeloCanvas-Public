@@ -11,6 +11,11 @@ import type {
 	PlaybackMode,
 	ResumePoint,
 } from './core/listening'
+import {
+	douyinAudioUri,
+	type DouyinAudio,
+	type DouyinAudioStore,
+} from './core/douyin-audio'
 import { validateSourceId } from './core/listening'
 import {
 	localAudioUri,
@@ -23,6 +28,7 @@ import {
 	type Source,
 } from './core/model'
 import {
+	isDouyinLibrarySource,
 	isLocalLibrarySource,
 	type MusicLibrarySource,
 } from './core/music-library-source'
@@ -79,6 +85,7 @@ export interface PlaybackNative {
 	isPlaybackReplacementCurrent(token: number): Promise<boolean>
 	cancelPlaybackReplacementIfCurrent(token: number): Promise<boolean>
 	finishPlaybackPreparationIfCurrent(token: number): Promise<boolean>
+	douyinRegisterStreams?(streamsJson: string): void
 }
 
 const trackFor = (source: Source, entryId = source.id): Track => ({
@@ -142,6 +149,7 @@ export class PlaybackController {
 			>,
 		private sessions: Pick<SessionStore, 'getSession' | 'saveSession'>,
 		private localAudio?: Pick<LocalAudioStore, 'get'>,
+		private douyinAudio?: Pick<DouyinAudioStore, 'get' | 'upsert' | 'upsertMany'>,
 	) {}
 
 	reconcile(snapshot: PlaybackSnapshot): void {
@@ -638,6 +646,36 @@ export class PlaybackController {
 		return this.replace([localTrack(audio)], id, 0, 1, 'music', preparation)
 	}
 
+	async playDouyinAudio(
+		items: DouyinAudio[],
+		startId: string,
+		preparation: PlaybackPreparation,
+	): Promise<PlaybackSnapshot | null> {
+		if (!(await this.isPreparationCurrent(preparation))) return null
+		if (!items.length) throw new Error('没有可播放的抖音原声')
+		const seen = new Set<string>()
+		const unique: DouyinAudio[] = []
+		for (const item of items) {
+			if (!seen.has(item.id)) {
+				seen.add(item.id)
+				unique.push(item)
+			}
+		}
+		this.douyinAudio?.upsertMany(unique)
+		const streams = unique
+			.filter((item) => item.audioUrl)
+			.map((item) => ({ awemeId: item.awemeId, audioUrl: item.audioUrl }))
+		if (streams.length) {
+			this.native.douyinRegisterStreams?.(JSON.stringify(streams))
+		}
+		const tracks = unique.map((item) => douyinTrack(item))
+		const selected = tracks.find((t) => t.id === startId) ?? tracks[0]
+		const active = await this.readForProjection(preparation)
+		if (!(await this.isPreparationCurrent(preparation))) return null
+		requireReadableStorage(active)
+		return this.replace(tracks, selected.id, 0, 1, 'music', preparation)
+	}
+
 	async playPlaylist(
 		entries: { itemId: string; source: MusicLibrarySource }[],
 		startItemId: string,
@@ -648,6 +686,8 @@ export class PlaybackController {
 		const tracks = entries.map(({ itemId, source }) =>
 			isLocalLibrarySource(source)
 				? this.localPlaylistTrack(source.id, playlistEntryId(itemId))
+				: isDouyinLibrarySource(source)
+					? this.douyinPlaylistTrack(source, playlistEntryId(itemId))
 				: trackFor(source, playlistEntryId(itemId)),
 		)
 		if (new Set(tracks.map((track) => track.id)).size !== tracks.length)
@@ -656,7 +696,26 @@ export class PlaybackController {
 		if (!tracks.some((track) => track.id === currentEntryId))
 			throw new Error('起播条目不在歌单中')
 		for (const entry of entries)
-			if (!isLocalLibrarySource(entry.source)) this.library.save(entry.source)
+			if (isDouyinLibrarySource(entry.source)) {
+				const s = entry.source
+				this.douyinAudio?.upsert({
+					id: s.id,
+					awemeId: s.awemeId,
+					title: s.originalTitle,
+					artist: s.performer || s.uploader || '抖音原声',
+					artwork: s.artwork,
+					durationSeconds: s.duration,
+					audioUrl: s.audioUrl,
+					addedAt: s.addedAt || Date.now(),
+				})
+				if (s.audioUrl) {
+					this.native.douyinRegisterStreams?.(
+						JSON.stringify([{ awemeId: s.awemeId, audioUrl: s.audioUrl }]),
+					)
+				}
+			} else if (!isLocalLibrarySource(entry.source)) {
+				this.library.save(entry.source)
+			}
 		if (!(await this.isPreparationCurrent(preparation))) return null
 		const active = await this.readForProjection(preparation)
 		if (!(await this.isPreparationCurrent(preparation))) return null
@@ -670,11 +729,33 @@ export class PlaybackController {
 		return localTrack(audio, entryId)
 	}
 
+	private douyinPlaylistTrack(
+		source: Extract<MusicLibrarySource, { kind: 'douyin' }>,
+		entryId: string,
+	): Track {
+		const saved = this.douyinAudio?.get(source.id)
+		return douyinTrack(
+			saved ?? {
+				id: source.id,
+				awemeId: source.awemeId,
+				title: source.originalTitle,
+				artist: source.performer || source.uploader || '抖音原声',
+				artwork: source.artwork,
+				durationSeconds: source.duration,
+				audioUrl: source.audioUrl,
+				addedAt: source.addedAt,
+			},
+			entryId,
+		)
+	}
+
 	private sourceTrack(entry: QueueEntry): Track {
 		const source = this.library.get(entry.sourceId)
 		if (!source) {
 			const audio = this.localAudio?.get(entry.sourceId)
 			if (audio) return localTrack(audio, entry.entryId)
+			const douyin = this.douyinAudio?.get(entry.sourceId)
+			if (douyin) return douyinTrack(douyin, entry.entryId)
 			throw new Error('暂存队列的音源信息不存在，请重新打开内容')
 		}
 		return trackFor(source, entry.entryId)
@@ -836,6 +917,18 @@ export class PlaybackController {
 		// The returned snapshot may already be obsolete by JS delivery. The hook
 		// reads current native state under its existing sync ordering instead.
 		return result.applied
+	}
+}
+
+function douyinTrack(audio: DouyinAudio, entryId = audio.id): Track {
+	return {
+		id: entryId,
+		sourceId: audio.id,
+		url: douyinAudioUri(audio.id),
+		title: audio.title,
+		artist: audio.artist || '抖音原声',
+		artwork: audio.artwork,
+		duration: audio.durationSeconds,
 	}
 }
 

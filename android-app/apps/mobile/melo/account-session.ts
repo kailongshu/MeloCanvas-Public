@@ -12,9 +12,9 @@ export class AccountSessionError extends Error {
 	) {
 		super(
 			{
-				'signed-out': '请先登录 B 站账号',
+				'signed-out': '请先在「我的音绘」登录 B 站账号后再播放 B 站音源',
 				'stale-session': '账号已变更，请重试',
-				expired: '登录已失效，请重新扫码',
+				expired: 'B 站登录已失效，请重新扫码',
 				network: '账号连接失败，请稍后重试',
 				storage: '无法安全保存或清除登录状态，请重试',
 				'invalid-response': '登录响应无法验证，请重试',
@@ -28,7 +28,13 @@ export interface AccountIdentity {
 	avatar?: string
 }
 export interface AccountSnapshot {
-	status: 'checking' | 'signed-out' | 'authenticated' | 'offline' | 'error'
+	status:
+		| 'checking'
+		| 'guest'
+		| 'signed-out'
+		| 'authenticated'
+		| 'offline'
+		| 'error'
 	generation: number
 	account: AccountIdentity | null
 	error: string | null
@@ -41,6 +47,7 @@ export interface AccountDependencies {
 	verify(cookie: string, signal: AbortSignal): Promise<AccountIdentity>
 	setNativeCookie(cookie: string): void
 	setOfflineAccess(enabled: boolean): void
+	setGuestAccess?(enabled: boolean): void
 	pause(): Promise<unknown>
 	fetch(input: string, init: RequestInit): Promise<Response>
 }
@@ -81,6 +88,7 @@ export class AccountSession {
 		this.pending.clear()
 		this.deps.setNativeCookie('')
 		this.deps.setOfflineAccess(false)
+		this.deps.setGuestAccess?.(false)
 		void this.deps.pause().catch(() => {})
 	}
 	private async serialized(action: () => Promise<void>) {
@@ -91,6 +99,11 @@ export class AccountSession {
 	private ensure(generation: number) {
 		if (generation !== this.state.generation)
 			throw new AccountSessionError('stale-session')
+	}
+	enterGuest(): void {
+		this.invalidate()
+		this.deps.setGuestAccess?.(true)
+		this.emit('guest', null, null, null)
 	}
 	async restore(): Promise<void> {
 		this.invalidate()
@@ -103,7 +116,8 @@ export class AccountSession {
 			storedCookie = cookie
 			this.ensure(generation)
 			if (!cookie) {
-				this.emit('signed-out', null, null, 'signed-out')
+				this.deps.setGuestAccess?.(true)
+				this.emit('guest', null, null, null)
 				return
 			}
 			await this.activate(cookie, generation, false)
@@ -118,7 +132,7 @@ export class AccountSession {
 				this.emit(
 					'offline',
 					null,
-					'当前仅可播放本地及已下载歌曲；在线功能需重新核验账号',
+					'当前仅可播放本地及已下载歌曲；B 站在线功能需重新核验账号',
 					'network',
 				)
 				return
@@ -127,10 +141,12 @@ export class AccountSession {
 				await this.signOut('expired')
 				return
 			}
+			// Do not block entering MeloCanvas if Bilibili verification fails
+			this.deps.setGuestAccess?.(true)
 			this.emit(
-				'error',
+				'guest',
 				null,
-				'登录状态暂时无法验证，请检查网络后重试',
+				'B 站登录状态暂未验证，已进入免登录模式',
 				error instanceof AccountSessionError ? error.code : 'storage',
 			)
 		}
@@ -160,6 +176,7 @@ export class AccountSession {
 		} catch (error) {
 			if (generation !== this.state.generation)
 				throw new AccountSessionError('stale-session')
+			this.deps.setGuestAccess?.(true)
 			this.emit(
 				'error',
 				null,
@@ -199,11 +216,12 @@ export class AccountSession {
 	async signOut(reason?: 'expired'): Promise<void> {
 		this.invalidate()
 		const generation = this.state.generation
+		this.deps.setGuestAccess?.(true)
 		this.emit(
-			'signed-out',
+			'guest',
 			null,
-			reason ? '登录已失效，请重新扫码' : null,
-			reason ?? 'signed-out',
+			reason ? 'B 站登录已失效，如需播放 B 站音源请重新扫码' : null,
+			reason ?? null,
 		)
 		try {
 			await Promise.all([

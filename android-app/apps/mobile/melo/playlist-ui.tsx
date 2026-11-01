@@ -12,6 +12,7 @@ import {
 
 import type { SearchItem, Source as BiliSource } from './core/model'
 import {
+	isDouyinLibrarySource,
 	isLocalLibrarySource,
 	type MusicLibrarySource as Source,
 } from './core/music-library-source'
@@ -1488,7 +1489,7 @@ function PickerSource({
 					muted
 					size={10}
 				>
-					{isLocalLibrarySource(source) ? '本地音频' : 'UP'}，{' '}
+					{isLocalLibrarySource(source) ? '本地音频' : isDouyinLibrarySource(source) ? '抖音原声' : 'UP'}，{' '}
 					{source.uploader || '未知艺术家'}，{time(source.duration)}
 				</T>
 			</View>

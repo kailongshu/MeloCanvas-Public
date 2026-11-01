@@ -32,9 +32,10 @@ object RecentMusicHistoryCodec {
 
     private fun valid(entry: RecentMusicHistoryEntry): Boolean {
         val cid = source.matchEntire(entry.sourceId)?.groupValues?.get(1)?.toLongOrNull()
-        return (cid != null && cid in 1..9007199254740991L ||
-            entry.sourceId.startsWith("local:") && LocalAudioIdentity.validId(entry.sourceId.removePrefix("local:"))) &&
-            entry.playedAt in 0..9007199254740991L
+        val validSource = (cid != null && cid in 1..9007199254740991L) ||
+            (entry.sourceId.startsWith("local:") && LocalAudioIdentity.validId(entry.sourceId.removePrefix("local:"))) ||
+            (entry.sourceId.startsWith("douyin:") && DouyinAudioIdentity.validId(entry.sourceId.removePrefix("douyin:")))
+        return validSource && entry.playedAt in 0..9007199254740991L
     }
 
     fun sorted(entries: List<RecentMusicHistoryEntry>): List<RecentMusicHistoryEntry> =

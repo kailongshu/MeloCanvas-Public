@@ -5,6 +5,7 @@ object OrpheusConfig {
     private var cookie: String? = null
     private var generation = 0L
     private var offlineAccess = false
+    private var guestAccess = false
     private val expiredListeners = java.util.concurrent.CopyOnWriteArrayList<(Long) -> Unit>()
 
     fun addExpiredListener(listener: (Long) -> Unit) { expiredListeners.add(listener) }
@@ -16,6 +17,7 @@ object OrpheusConfig {
             if (expectedCookie == null || cookie == null || cookie != expectedCookie || generation != expectedGeneration) return false
             cookie = null
             offlineAccess = false
+            guestAccess = false
             ++generation
         }
         expiredListeners.forEach { it(expiredGeneration) }
@@ -26,9 +28,10 @@ object OrpheusConfig {
         @Synchronized get() = cookie
         @Synchronized set(value) {
             val next = value?.takeIf { it.isNotBlank() }
-            if (next != cookie || offlineAccess) {
+            if (next != cookie || offlineAccess || guestAccess) {
                 cookie = next
                 offlineAccess = false
+                guestAccess = false
                 generation++
             }
         }
@@ -38,12 +41,24 @@ object OrpheusConfig {
         val next = enabled && cookie == null
         if (next != offlineAccess) {
             offlineAccess = next
+            if (next) guestAccess = false
             generation++
         }
     }
-    @Synchronized fun hasPlaybackAccess(): Boolean = cookie != null || offlineAccess
+
+    /** Granted when user enters MeloCanvas without Bilibili login (guest / Douyin mode). */
+    @Synchronized fun setGuestAccess(enabled: Boolean) {
+        val next = enabled && cookie == null
+        if (next != guestAccess) {
+            guestAccess = next
+            if (next) offlineAccess = false
+            generation++
+        }
+    }
+
+    @Synchronized fun hasPlaybackAccess(): Boolean = cookie != null || offlineAccess || guestAccess
     @Synchronized fun requirePlaybackAccess(expectedGeneration: Long? = null) {
-        check((cookie != null || offlineAccess) && (expectedGeneration == null || expectedGeneration == generation)) {
+        check((cookie != null || offlineAccess || guestAccess) && (expectedGeneration == null || expectedGeneration == generation)) {
             "Bilibili account login required"
         }
     }
@@ -53,6 +68,18 @@ object OrpheusConfig {
             "Bilibili account login required"
         }
         return generation
+    }
+    @Synchronized fun hasGuestAccess(): Boolean = guestAccess
+    @Synchronized fun captureOnlineOrGuestGeneration(expectedCookie: String?): Long {
+        if (expectedCookie == null && guestAccess && cookie == null) return generation
+        return captureAccountGeneration(expectedCookie)
+    }
+    @Synchronized fun requireOnlineOrGuestSession(expectedGeneration: Long? = null) {
+        if (guestAccess && cookie == null) {
+            requirePlaybackAccess(expectedGeneration)
+            return
+        }
+        requireAccountSession(expectedGeneration)
     }
     @Synchronized fun hasAccountSession(): Boolean = cookie != null
     @Synchronized fun accountGeneration(): Long = generation
