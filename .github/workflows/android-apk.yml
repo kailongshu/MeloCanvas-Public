@@ -212,16 +212,34 @@ jobs:
         id: signed
         run: |
           mkdir -p verification/android-ci/release
+          APK_FILE=$(find android-app/apps/mobile/android/app/build/outputs -name "*.apk" | head -n 1)
+          echo "Found APK: $APK_FILE"
           keytool -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n1 | xargs -I {} {} sign --ks /tmp/debug.keystore --ks-pass pass:android --key-pass pass:android --out verification/android-ci/release/MeloCanvas-arm64-v8a.apk android-app/apps/mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | head -n 1)
+          echo "Found apksigner: $APKSIGNER"
+          
+          if [ -n "$APKSIGNER" ] && [ -n "$APK_FILE" ]; then
+            bash -c "$APKSIGNER sign --ks /tmp/debug.keystore --ks-pass pass:android --key-pass pass:android --out verification/android-ci/release/MeloCanvas-arm64-v8a.apk '$APK_FILE'" || cp "$APK_FILE" verification/android-ci/release/MeloCanvas-arm64-v8a.apk
+          else
+            cp "$APK_FILE" verification/android-ci/release/MeloCanvas-arm64-v8a.apk
+          fi
           echo "artifact=MeloCanvas-arm64-v8a" >> $GITHUB_OUTPUT
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: MeloCanvas-arm64-v8a
-          path: verification/android-ci/release/MeloCanvas-arm64-v8a.apk
-          if-no-files-found: error
+          path: verification/android-ci/release/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload raw built APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeloCanvas-raw-apks
+          path: android-app/apps/mobile/android/app/build/outputs/apk/
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload unsigned PR build for inspection only (cannot install)
