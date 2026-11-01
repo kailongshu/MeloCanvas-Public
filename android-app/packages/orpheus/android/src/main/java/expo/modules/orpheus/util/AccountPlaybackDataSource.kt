@@ -23,7 +23,14 @@ object AccountPlaybackDataSource {
             override fun addTransferListener(listener: TransferListener) = source.addTransferListener(listener)
             override fun getUri(): Uri? = source.uri
             override fun getResponseHeaders(): Map<String, List<String>> = source.responseHeaders
+            private var isDirectHttp = false
             override fun open(spec: DataSpec): Long {
+                val scheme = spec.uri.scheme
+                if (scheme == "http" || scheme == "https") {
+                    isDirectHttp = true
+                    return source.open(spec)
+                }
+                isDirectHttp = false
                 checkSession()
                 if (!OrpheusConfig.hasAccountSession() &&
                     LocalAudioIdentity.idFromUri(spec.uri.toString()) == null &&
@@ -34,7 +41,7 @@ object AccountPlaybackDataSource {
                 return length
             }
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                checkSession()
+                if (!isDirectHttp) checkSession()
                 val count = source.read(buffer, offset, length)
                 checkSession()
                 return count

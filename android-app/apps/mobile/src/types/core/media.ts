@@ -3,7 +3,7 @@ export interface Artist {
 	name: string
 	avatarUrl?: string | null
 	signature?: string | null
-	source: 'bilibili' | 'local'
+	source: 'bilibili' | 'douyin' | 'local'
 	remoteId?: string | null
 	createdAt: Date
 	updatedAt: Date
@@ -21,7 +21,7 @@ interface BaseTrack {
 	title: string
 	artist: Artist | null
 	coverUrl: string | null
-	source: 'bilibili' | 'local'
+	source: 'bilibili' | 'douyin' | 'local'
 	createdAt: Date
 	duration: number // 歌曲时长，单位：秒
 	updatedAt: Date
@@ -55,6 +55,19 @@ export interface BilibiliTrack extends BaseTrack {
 	}
 }
 
+export interface DouyinTrack extends BaseTrack {
+	source: 'douyin'
+	douyinMetadata: {
+		awemeId: string
+		musicId?: string
+		secUid?: string
+		authorName: string
+		videoUrl?: string
+		audioUrl?: string
+		desc: string
+	}
+}
+
 export interface LocalTrack extends BaseTrack {
 	source: 'local'
 	localMetadata: {
@@ -62,7 +75,7 @@ export interface LocalTrack extends BaseTrack {
 	}
 }
 
-export type Track = BilibiliTrack | LocalTrack
+export type Track = BilibiliTrack | DouyinTrack | LocalTrack
 
 export type PlaylistPlayerPreference = 'inherit' | 'music' | 'podcast'
 

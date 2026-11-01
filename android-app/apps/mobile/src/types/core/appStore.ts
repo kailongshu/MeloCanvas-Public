@@ -24,6 +24,15 @@ interface BilibiliUserSummary {
 	cachedAt?: number
 }
 
+interface DouyinUserSummary {
+	uid?: string
+	secUid?: string
+	nickname?: string
+	avatar?: string
+	signature?: string
+	cachedAt?: number
+}
+
 interface BBPlayerAccount {
 	id: string
 	username: string
@@ -34,16 +43,25 @@ interface BBPlayerAccount {
 interface AppState {
 	bilibiliCookie: Record<string, string> | null
 	bilibiliUserInfo: BilibiliUserSummary | null
+	douyinCookie: Record<string, string> | null
+	douyinUserInfo: DouyinUserSummary | null
 	bbplayerToken: string | null
 	bbplayerAccount: BBPlayerAccount | null
 	settings: Settings
 
-	// Cookies
+	// Bilibili Cookies & Info
 	hasBilibiliCookie: () => boolean
 	setBilibiliCookie: (cookieString: string) => Result<void, Error>
 	updateBilibiliCookie: (updates: Record<string, string>) => Result<void, Error>
 	clearBilibiliCookie: () => void
 	setBilibiliUserInfo: (info: BilibiliUserSummary | null) => void
+
+	// Douyin Cookies & Info
+	hasDouyinCookie: () => boolean
+	setDouyinCookie: (cookieString: string) => Result<void, Error>
+	updateDouyinCookie: (updates: Record<string, string>) => Result<void, Error>
+	clearDouyinCookie: () => void
+	setDouyinUserInfo: (info: DouyinUserSummary | null) => void
 
 	// Auth
 	setBbplayerToken: (token: string) => void
@@ -58,4 +76,10 @@ interface AppState {
 	setEnableDataCollection: (value: boolean) => void
 }
 
-export type { AppState, BBPlayerAccount, BilibiliUserSummary, Settings }
+export type {
+	AppState,
+	BBPlayerAccount,
+	BilibiliUserSummary,
+	DouyinUserSummary,
+	Settings,
+}

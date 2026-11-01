@@ -1,8 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { decode } from 'he'
-import { useMemo, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshControl, StyleSheet, View } from 'react-native'
-import { Appbar, Text, useTheme } from 'react-native-paper'
+import { Appbar, SegmentedButtons, Text, useTheme } from 'react-native-paper'
 
 import ActivityIndicator from '@/components/common/ActivityIndicator'
 import { PlaylistError } from '@/features/playlist/remote/components/PlaylistError'
@@ -18,10 +18,12 @@ import { useSearchResults } from '@/hooks/queries/bilibili/search'
 import { useScreenTransitionReady } from '@/hooks/router/useScreenTransitionReady'
 import { useModalStore } from '@/hooks/stores/useModalStore'
 import { useDoubleTapScrollToTop } from '@/hooks/ui/useDoubleTapScrollToTop'
+import { douyinApi } from '@/lib/api/douyin/api'
 import { analyticsService } from '@/lib/services/analyticsService'
 import type { BilibiliSearchVideo } from '@/types/apis/bilibili'
-import type { BilibiliTrack, Track } from '@/types/core/media'
+import type { BilibiliTrack, DouyinTrack, Track } from '@/types/core/media'
 import { formatMMSSToSeconds } from '@/utils/time'
+import toast from '@/utils/toast'
 
 const mapApiItemToTrack = (apiItem: BilibiliSearchVideo): BilibiliTrack => {
 	return {
@@ -57,6 +59,10 @@ export default function SearchResultsPage() {
 	const { query } = useLocalSearchParams<{ query: string }>()
 	const router = useRouter()
 
+	const [source, setSource] = useState<'bilibili' | 'douyin'>('bilibili')
+	const [douyinTracks, setDouyinTracks] = useState<DouyinTrack[]>([])
+	const [isDouyinLoading, setIsDouyinLoading] = useState(false)
+
 	const { selected, selectMode, toggle, enterSelectMode } = useTrackSelection()
 	const selection = useMemo(
 		() => ({
@@ -82,6 +88,26 @@ export default function SearchResultsPage() {
 		fetchNextPage,
 	} = useSearchResults(query)
 
+	const searchDouyin = useCallback(async () => {
+		if (!query) return
+		setIsDouyinLoading(true)
+		const res = await douyinApi.search({ keyword: query })
+		if (res.isErr()) {
+			toast.error(`抖音搜索失败: ${res.error.message}`)
+			setIsDouyinLoading(false)
+			return
+		}
+		const mapped = res.value.map((item) => douyinApi.convertToTrack(item))
+		setDouyinTracks(mapped)
+		setIsDouyinLoading(false)
+	}, [query])
+
+	useEffect(() => {
+		if (source === 'douyin' && douyinTracks.length === 0) {
+			searchDouyin()
+		}
+	}, [source, douyinTracks.length, searchDouyin])
+
 	useEffect(() => {
 		if (query) {
 			void analyticsService.logSearch('global')
@@ -90,7 +116,7 @@ export default function SearchResultsPage() {
 
 	const { trackMenuItems, playTrack } = useSearchInteractions()
 
-	const uniqueSearchData = useMemo(() => {
+	const uniqueBiliSearchData = useMemo(() => {
 		if (!searchData?.pages) {
 			return []
 		}
@@ -109,11 +135,14 @@ export default function SearchResultsPage() {
 		return uniqueTracks.map(mapApiItemToTrack)
 	}, [searchData])
 
+	const currentTracks: Track[] =
+		source === 'bilibili' ? uniqueBiliSearchData : douyinTracks
+
 	if (!isListReady) {
 		return <PlaylistTrackListSkeleton animate={isListReady} />
 	}
 
-	if (isErrorSearchData) {
+	if (source === 'bilibili' && isErrorSearchData) {
 		return <PlaylistError text='加载失败' />
 	}
 
@@ -124,7 +153,7 @@ export default function SearchResultsPage() {
 					title={
 						selectMode
 							? `已选择\u2009${selected.size}\u2009首`
-							: `搜索结果\u2009-\u2009${query}`
+							: `搜索\u2009-\u2009${query}`
 					}
 					onPress={handleDoubleTap}
 				/>
@@ -135,10 +164,10 @@ export default function SearchResultsPage() {
 							onPress={() => {
 								const payloads = []
 								for (const id of selected) {
-									const track = uniqueSearchData.find((t) => t.id === id)
+									const track = currentTracks.find((t) => t.id === id)
 									if (track) {
 										payloads.push({
-											track: track as Track,
+											track,
 											artist: track.artist!,
 										})
 									}
@@ -154,23 +183,46 @@ export default function SearchResultsPage() {
 				)}
 			</Appbar.Header>
 
+			<View style={styles.segmentContainer}>
+				<SegmentedButtons
+					value={source}
+					onValueChange={(val) => setSource(val as 'bilibili' | 'douyin')}
+					buttons={[
+						{ value: 'bilibili', label: 'B 站音源' },
+						{ value: 'douyin', label: '抖音原声 / 音乐' },
+					]}
+				/>
+			</View>
+
 			<View style={styles.listContainer}>
 				<TrackList
 					listRef={listRef}
-					tracks={uniqueSearchData ?? []}
-					playTrack={playTrack}
-					trackMenuItems={trackMenuItems}
+					tracks={currentTracks}
+					playTrack={playTrack as any}
+					trackMenuItems={trackMenuItems as any}
 					selection={selection}
-					onEndReached={hasNextPage ? () => fetchNextPage() : undefined}
-					hasNextPage={hasNextPage}
-					isFetchingNextPage={isFetchingNextPage}
-					ListHeaderComponent={<SearchUserHeader query={query} />}
+					onEndReached={
+						source === 'bilibili' && hasNextPage
+							? () => fetchNextPage()
+							: undefined
+					}
+					hasNextPage={source === 'bilibili' ? hasNextPage : false}
+					isFetchingNextPage={
+						source === 'bilibili' ? isFetchingNextPage : isDouyinLoading
+					}
+					ListHeaderComponent={
+						source === 'bilibili' ? <SearchUserHeader query={query} /> : null
+					}
 					refreshControl={
 						<RefreshControl
 							refreshing={refreshing}
 							onRefresh={async () => {
 								setRefreshing(true)
-								await refetch()
+								if (source === 'bilibili') {
+									await refetch()
+								} else {
+									await searchDouyin()
+								}
 								setRefreshing(false)
 							}}
 							colors={[colors.primary]}
@@ -178,7 +230,8 @@ export default function SearchResultsPage() {
 						/>
 					}
 					ListEmptyComponent={
-						isPendingSearchData ? (
+						(source === 'bilibili' && isPendingSearchData) ||
+						(source === 'douyin' && isDouyinLoading) ? (
 							<View>
 								<View style={styles.videoLoadingRow}>
 									<Text
@@ -188,7 +241,7 @@ export default function SearchResultsPage() {
 											{ color: colors.onSurface },
 										]}
 									>
-										相关视频
+										{source === 'bilibili' ? '相关视频' : '搜索抖音原声'}
 									</Text>
 									<ActivityIndicator
 										size='small'
@@ -220,6 +273,10 @@ export default function SearchResultsPage() {
 const styles = StyleSheet.create({
 	container: {
 		flex: 1,
+	},
+	segmentContainer: {
+		paddingHorizontal: 16,
+		paddingVertical: 8,
 	},
 	listContainer: {
 		flex: 1,

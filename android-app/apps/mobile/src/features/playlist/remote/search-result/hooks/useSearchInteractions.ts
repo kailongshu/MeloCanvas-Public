@@ -5,7 +5,7 @@ import { useCallback } from 'react'
 import { MULTIPAGE_VIDEO_KEYWORDS } from '@/features/playlist/remote/search-result/constants'
 import { useModalStore } from '@/hooks/stores/useModalStore'
 import { syncFacade } from '@/lib/facades/syncBilibiliPlaylist'
-import type { BilibiliTrack } from '@/types/core/media'
+import type { BilibiliTrack, Track } from '@/types/core/media'
 import { toastAndLogError } from '@/utils/error-handling'
 import { reportErrorToSentry } from '@/utils/log'
 import { addToQueue } from '@/utils/player'
@@ -36,19 +36,28 @@ export function useSearchInteractions() {
 	const openModal = useModalStore((state) => state.open)
 
 	const playTrack = useCallback(
-		async (track: BilibiliTrack, playNext = false) => {
-			if (
-				MULTIPAGE_VIDEO_KEYWORDS.some((keyword) =>
-					track.title?.includes(keyword),
-				)
-			) {
-				router.navigate({
-					pathname: '/playlist/remote/multipage/[bvid]',
-					params: { bvid: track.bilibiliMetadata.bvid },
-				})
-				return
+		async (track: Track, playNext = false) => {
+			if (track.source === 'bilibili') {
+				if (
+					MULTIPAGE_VIDEO_KEYWORDS.some((keyword) =>
+						track.title?.includes(keyword),
+					)
+				) {
+					router.navigate({
+						pathname: '/playlist/remote/multipage/[bvid]',
+						params: { bvid: track.bilibiliMetadata.bvid },
+					})
+					return
+				}
+				const createIt = await syncFacade.addTrackToLocal(track)
+				if (createIt.isErr()) {
+					toastAndLogError(
+						'将 track 录入本地失败',
+						createIt.error,
+						'UI.Playlist.Remote',
+					)
+				}
 			}
-			const createIt = await syncFacade.addTrackToLocal(track)
 			if (createIt.isErr()) {
 				toastAndLogError(
 					'将 track 录入本地失败',

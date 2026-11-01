@@ -179,6 +179,9 @@ function getInternalPlayUri(track: Track) {
 			? `orpheus://bilibili?bvid=${track.bilibiliMetadata.bvid}&cid=${track.bilibiliMetadata.cid}&hires=0&dolby=0`
 			: `orpheus://bilibili?bvid=${track.bilibiliMetadata.bvid}&hires=0&dolby=0`
 	}
+	if (track.source === 'douyin' && track.douyinMetadata) {
+		return track.douyinMetadata.audioUrl || track.douyinMetadata.videoUrl
+	}
 	if (track.source === 'local' && track.localMetadata) {
 		return track.localMetadata.localPath
 	}

@@ -14,6 +14,11 @@ import java.io.IOException
 object PlaybackPreparation {
     /** Resolve DASH audio and probe its CDN without touching the player or storing the signed URL. */
     fun checkAudio(context: Context, uri: String, guard: PlaybackReplacementGuard, token: Long) {
+        val parsedUri = Uri.parse(uri)
+        if (parsedUri.scheme == "http" || parsedUri.scheme == "https") {
+            check(guard.isCurrent(token)) { "PlaybackReplacementCancelled" }
+            return
+        }
         OrpheusConfig.requirePlaybackAccess()
         check(guard.isCurrent(token)) { "PlaybackReplacementCancelled" }
         LocalAudioIdentity.idFromUri(uri)?.let { id ->

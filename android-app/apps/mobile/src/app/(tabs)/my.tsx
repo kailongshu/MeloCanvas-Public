@@ -47,6 +47,7 @@ export default function MyPage() {
 
 	const headerForegroundColor = useSkinForegroundColor()
 	const hasCookie = useAppStore((state) => state.hasBilibiliCookie())
+	const hasDouyinCookie = useAppStore((state) => state.hasDouyinCookie())
 	const cachedProfile = useAppStore((state) => state.bilibiliUserInfo)
 	const account = useAppStore((state) => state.bbplayerAccount)
 	const token = useAppStore((state) => state.bbplayerToken)
@@ -153,6 +154,35 @@ export default function MyPage() {
 					</Touchable>
 					<Touchable
 						accessibilityRole='button'
+						accessibilityLabel='抖音账号'
+						style={[
+							styles.accountBar,
+							{ backgroundColor: colors.surfaceVariant, marginTop: 8 },
+						]}
+						onPress={() => openModal('DouyinLogin' as any, undefined)}
+					>
+						<Icon
+							source='music-note'
+							size={20}
+							color={colors.onSurfaceVariant}
+						/>
+						<Text
+							variant='titleSmall'
+							style={{ color: colors.onSurfaceVariant }}
+						>
+							抖音账号登录
+						</Text>
+						<Text
+							variant='bodySmall'
+							style={[styles.accountStatus, { color: colors.onSurfaceVariant }]}
+							numberOfLines={1}
+						>
+							{hasDouyinCookie ? '已授权' : '未登录 (点击扫码/输入)'}
+						</Text>
+						{chevron()}
+					</Touchable>
+					<Touchable
+						accessibilityRole='button'
 						accessibilityLabel='BBPlayer 账号'
 						style={[
 							styles.accountBar,
@@ -201,6 +231,38 @@ export default function MyPage() {
 							onPress={() => void syncFailuresSheetRef.current?.present()}
 						/>
 					)}
+					<List.Item
+						title='抖音 · 我的喜欢'
+						description={hasDouyinCookie ? '浏览并播放喜欢的原声' : '需要先登录抖音'}
+						left={(props) => (
+							<List.Icon
+								{...props}
+								icon='heart-outline'
+							/>
+						)}
+						right={chevron}
+						onPress={() =>
+							hasDouyinCookie
+								? router.navigate('/playlist/remote/douyin/favorite')
+								: openModal('DouyinLogin' as any, undefined)
+						}
+					/>
+					<List.Item
+						title='抖音 · 我的收藏'
+						description={hasDouyinCookie ? '浏览并播放收藏的原声/视频' : '需要先登录抖音'}
+						left={(props) => (
+							<List.Icon
+								{...props}
+								icon='star-outline'
+							/>
+						)}
+						right={chevron}
+						onPress={() =>
+							hasDouyinCookie
+								? router.navigate('/playlist/remote/douyin/collection')
+								: openModal('DouyinLogin' as any, undefined)
+						}
+					/>
 					<List.Item
 						title='最近常听'
 						left={(props) => (

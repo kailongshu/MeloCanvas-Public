@@ -17,6 +17,7 @@ export interface ModalPropsMap {
 	EditPlaylistMetadata: { playlist: Playlist }
 	EditTrackMetadata: { track: Track }
 	CookieLogin: undefined
+	DouyinLogin: undefined
 	CreatePlaylist: { redirectToNewPlaylist?: boolean }
 	UpdateApp: { version: string; notes: string; url: string; forced?: boolean }
 	UpdateTrackLocalPlaylists: { track: Track }

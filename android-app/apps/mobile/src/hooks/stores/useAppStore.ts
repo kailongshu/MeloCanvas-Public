@@ -143,6 +143,8 @@ export const useAppStore = create<AppState>()(
 					hideStarPrompt: false,
 				},
 				bilibiliUserInfo: null,
+				douyinCookie: null,
+				douyinUserInfo: null,
 				bbplayerAccount: null,
 
 				hasBilibiliCookie: () => {
@@ -188,6 +190,47 @@ export const useAppStore = create<AppState>()(
 				setBilibiliUserInfo: (info) => {
 					set((state) => {
 						state.bilibiliUserInfo = info
+					})
+				},
+
+				hasDouyinCookie: () => {
+					const { douyinCookie } = get()
+					return !!douyinCookie && Object.keys(douyinCookie).length > 0
+				},
+
+				setDouyinCookie: (cookieString) => {
+					const result = parseCookieToObject(cookieString)
+					if (result.isErr()) {
+						return err(result.error)
+					}
+					const cookieObj = result.value
+					set((state) => {
+						state.douyinCookie = cookieObj
+					})
+					logger.info('设置抖音 cookie')
+					return ok(undefined)
+				},
+
+				updateDouyinCookie: (updates) => {
+					const currentCookie = get().douyinCookie ?? {}
+					const newCookie = { ...currentCookie, ...updates }
+					set((state) => {
+						state.douyinCookie = newCookie
+					})
+					logger.info('更新抖音 cookie')
+					return ok(undefined)
+				},
+
+				clearDouyinCookie: () => {
+					set((state) => {
+						state.douyinCookie = null
+						state.douyinUserInfo = null
+					})
+				},
+
+				setDouyinUserInfo: (info) => {
+					set((state) => {
+						state.douyinUserInfo = info
 					})
 				},
 
@@ -273,6 +316,8 @@ export const useAppStore = create<AppState>()(
 			partialize: (state) => ({
 				bilibiliCookie: state.bilibiliCookie,
 				bilibiliUserInfo: state.bilibiliUserInfo,
+				douyinCookie: state.douyinCookie,
+				douyinUserInfo: state.douyinUserInfo,
 				bbplayerToken: state.bbplayerToken,
 				bbplayerAccount: state.bbplayerAccount,
 				settings: state.settings,

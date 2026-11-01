@@ -17,6 +17,7 @@ const EditTrackMetadataModal = lazy(
 	() => import('./modals/edit-metadata/editTrackMetadataModal'),
 )
 const CookieLoginModal = lazy(() => import('./modals/login/CookieLoginModal'))
+const DouyinLoginModal = lazy(() => import('./modals/douyin/DouyinLoginModal'))
 const EditLyricsModal = lazy(() => import('./modals/lyrics/EditLyrics'))
 const ManualSearchLyricsModal = lazy(
 	() => import('./modals/lyrics/ManualSearchLyrics'),
@@ -85,6 +86,7 @@ export const modalRegistry: { [K in ModalKey]: ModalComponent<K> } = {
 	EditTrackMetadata: EditTrackMetadataModal,
 	BatchAddTracksToLocalPlaylist: BatchAddTracksToLocalPlaylistModal,
 	CookieLogin: CookieLoginModal,
+	DouyinLogin: DouyinLoginModal,
 	CreatePlaylist: CreatePlaylistModal,
 	UpdateApp: UpdateAppModal,
 	UpdateTrackLocalPlaylists: UpdateTrackLocalPlaylistsModal,
