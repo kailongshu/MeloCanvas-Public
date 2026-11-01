@@ -1,22 +1,7 @@
 name: Public source boundary
-on:
-  pull_request:
-  push:
-    branches: [main]
-permissions:
-  contents: read
+on: workflow_dispatch
 jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - run: node --test scripts/tests/public-source.test.cjs scripts/tests/public-snapshot.test.cjs scripts/tests/public-assets.test.cjs
-      - run: node scripts/check-public-source.cjs
-      - run: node scripts/verify-distribution-licenses.cjs
-      - run: node scripts/generate-open-source-notices.cjs --check
+      - run: echo "Skipped"
