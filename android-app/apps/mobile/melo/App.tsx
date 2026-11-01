@@ -558,9 +558,7 @@ function Product({
 		void douyinSession.restore()
 	}, [])
 	const [douyinLoginOpen, setDouyinLoginOpen] = useState(false)
-	const [douyinCollectionKind, setDouyinCollectionKind] = useState<
-		'favorite' | 'collection' | null
-	>(null)
+	const [douyinCollectionOpen, setDouyinCollectionOpen] = useState(false)
 	const [douyinSubmittedQuery, setDouyinSubmittedQuery] = useState('')
 	const [douyinSearchRevision, setDouyinSearchRevision] = useState(0)
 	const musicLikedIds = useMemo(
@@ -2129,7 +2127,7 @@ function Product({
 															size={12}
 															muted
 														>
-															粘贴分享链接免登录提取原声后台听歌，或登录同步喜欢与收藏
+															搜索歌曲 / 粘贴分享链接提取原声后台听歌，或扫码同步抖音音乐收藏
 														</T>
 													</View>
 													<Button
@@ -2138,7 +2136,7 @@ function Product({
 													>
 														{douyinState.status === 'authenticated'
 															? douyinState.nickname || '抖音已连接'
-															: '抖音登录'}
+															: '抖音扫码'}
 													</Button>
 												</View>
 												<View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}>
@@ -2147,21 +2145,13 @@ function Product({
 															navigateSearch(undefined, 'douyin', 'home')
 														}
 													>
-														提取链接 / 搜原声
+														搜原声 / 提取链接
 													</Button>
 													<Button
 														secondary
-														onPress={() => setDouyinCollectionKind('favorite')}
+														onPress={() => setDouyinCollectionOpen(true)}
 													>
-														抖音喜欢
-													</Button>
-													<Button
-														secondary
-														onPress={() =>
-															setDouyinCollectionKind('collection')
-														}
-													>
-														抖音收藏
+														抖音音乐收藏
 													</Button>
 												</View>
 											</Card>
@@ -2387,15 +2377,11 @@ function Product({
 													onPress={() => setDouyinLoginOpen(true)}
 												/>
 												<SettingsRow
-													label='抖音 · 我的喜欢'
-													onPress={() => setDouyinCollectionKind('favorite')}
+													label='抖音 · 音乐收藏'
+													onPress={() => setDouyinCollectionOpen(true)}
 												/>
 												<SettingsRow
-													label='抖音 · 我的收藏'
-													onPress={() => setDouyinCollectionKind('collection')}
-												/>
-												<SettingsRow
-													label='提取抖音分享链接 / 搜索原声'
+													label='搜索抖音原声 / 提取分享链接'
 													onPress={() =>
 														navigateSearch(undefined, 'douyin', 'profile')
 													}
@@ -2890,12 +2876,11 @@ function Product({
 					onNotice={setNotice}
 				/>
 				<DouyinCollectionModal
-					visible={douyinCollectionKind !== null}
-					kind={douyinCollectionKind}
+					visible={douyinCollectionOpen}
 					likedIds={musicLikedIds}
 					playbackBusy={player.switching || !!listening.pendingBvid}
 					currentSourceId={player.track?.sourceId ?? player.track?.id ?? null}
-					onClose={() => setDouyinCollectionKind(null)}
+					onClose={() => setDouyinCollectionOpen(false)}
 					onOpenLogin={() => setDouyinLoginOpen(true)}
 					onPlayQueue={(items, startId) => {
 						void playDouyinQueue(items, startId)

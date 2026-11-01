@@ -1,5 +1,6 @@
+import { Image } from 'expo-image'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { FlatList, Modal, View } from 'react-native'
+import { ActivityIndicator, FlatList, Modal, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import type { DouyinAudio } from './core/douyin-audio'
@@ -136,6 +137,72 @@ export function DouyinLoginModal({
 	const c = useTheme().tokens
 	const state = useDouyinSession()
 	const [manualCookie, setManualCookie] = useState('')
+	const [qrCode, setQrCode] = useState('')
+	const [qrLoading, setQrLoading] = useState(false)
+	const [qrHint, setQrHint] = useState('正在生成抖音登录二维码…')
+	const mountedRef = useRef(false)
+
+	const loadQr = useCallback(async () => {
+		setQrLoading(true)
+		setQrHint('正在生成抖音登录二维码…')
+		try {
+			const res = await douyinSession.fetchLoginQr()
+			if (!mountedRef.current) return
+			if (res.qrcode) {
+				setQrCode(res.qrcode)
+				setQrHint('请使用抖音 App 扫码登录')
+			} else {
+				setQrHint('未能自动生成二维码，可点击刷新或使用下方手机号验证码登录')
+			}
+		} finally {
+			if (mountedRef.current) setQrLoading(false)
+		}
+	}, [])
+
+	useEffect(() => {
+		mountedRef.current = visible
+		if (!visible) {
+			setQrCode('')
+			setQrLoading(false)
+			return
+		}
+		if (state.status !== 'authenticated') {
+			void loadQr()
+		}
+		return () => {
+			mountedRef.current = false
+		}
+	}, [visible, state.status, loadQr])
+
+	useEffect(() => {
+		if (!visible || state.status === 'authenticated') return
+		let active = true
+		const timer = setInterval(() => {
+			void douyinSession.pollLoginQr().then((res) => {
+				if (!active) return
+				if (res.authenticated) {
+					onNotice('抖音扫码登录成功')
+					onClose()
+					return
+				}
+				if (res.qrcode) {
+					setQrCode(res.qrcode)
+				}
+				if (res.status === 'scanned') {
+					setQrHint('已扫码，请在手机抖音上点击确认登录')
+				} else if (res.status === 'expired') {
+					setQrHint('二维码已过期，正在自动刷新…')
+					void loadQr()
+				} else if (res.qrcode) {
+					setQrHint('请使用抖音 App 扫码登录')
+				}
+			})
+		}, 1400)
+		return () => {
+			active = false
+			clearInterval(timer)
+		}
+	}, [visible, state.status, loadQr, onClose, onNotice])
 
 	if (!visible) return null
 
@@ -150,8 +217,8 @@ export function DouyinLoginModal({
 				muted
 			>
 				{state.status === 'authenticated'
-					? `当前已连接抖音账号${state.nickname ? `（${state.nickname}）` : ''}，可直接同步「我的喜欢」与「我的收藏」。`
-					: '登录后可同步抖音「我的喜欢」「我的收藏」并进行关键词搜索。粘贴抖音分享链接提取原声免登录也可直接使用。'}
+					? `当前已连接抖音账号${state.nickname ? `（${state.nickname}）` : ''}，可直接同步「抖音收藏 · 音乐」。`
+					: '直接用抖音 App 扫描下方二维码即可连接；若只有单台手机，可点击下方「手机号验证码登录」。'}
 			</T>
 			{!!state.error && (
 				<T
@@ -160,6 +227,70 @@ export function DouyinLoginModal({
 				>
 					{state.error}
 				</T>
+			)}
+			{state.status !== 'authenticated' && (
+				<View
+					style={{
+						alignItems: 'center',
+						justifyContent: 'center',
+						paddingVertical: 12,
+						paddingHorizontal: 14,
+						borderRadius: 16,
+						backgroundColor: c.surface.tinted,
+						gap: 10,
+					}}
+				>
+					<View
+						style={{
+							width: 204,
+							height: 204,
+							borderRadius: 14,
+							backgroundColor: '#FFFFFF',
+							alignItems: 'center',
+							justifyContent: 'center',
+							padding: 8,
+						}}
+					>
+						{qrCode ? (
+							<Image
+								source={{ uri: qrCode }}
+								style={{ width: 188, height: 188 }}
+								contentFit='contain'
+							/>
+						) : (
+							<View style={{ alignItems: 'center', gap: 10, paddingHorizontal: 12 }}>
+								{qrLoading && (
+									<ActivityIndicator
+										size='small'
+										color='#111827'
+									/>
+								)}
+								<T
+									size={12}
+									style={{ color: '#374151', textAlign: 'center' }}
+								>
+									{qrLoading ? '正在获取抖音二维码…' : '点击下方「刷新二维码」重试'}
+								</T>
+							</View>
+						)}
+					</View>
+					<T
+						size={12}
+						weight='600'
+						style={{ textAlign: 'center' }}
+					>
+						{qrHint}
+					</T>
+					<Button
+						secondary
+						disabled={qrLoading || state.busy}
+						onPress={() => {
+							void loadQr()
+						}}
+					>
+						{qrLoading ? '正在刷新二维码…' : '刷新二维码'}
+					</Button>
+				</View>
 			)}
 			<Button
 				disabled={state.busy}
@@ -173,10 +304,10 @@ export function DouyinLoginModal({
 				}}
 			>
 				{state.busy
-					? '正在打开抖音登录…'
+					? '正在打开登录窗口…'
 					: state.status === 'authenticated'
-						? '重新扫码 / 手机号登录抖音'
-						: '扫码 / 手机号验证码登录抖音'}
+						? '切换账号 / 重新登录抖音'
+						: '手机号验证码登录（纯净小窗）'}
 			</Button>
 			{state.status === 'authenticated' && (
 				<Button
@@ -196,7 +327,7 @@ export function DouyinLoginModal({
 					size={12}
 					muted
 				>
-					常规使用只需点击上方扫码或手机号登录；仅当内置网页被拦截时，才可从电脑浏览器复制抖音
+					常规使用直接扫码或用手机号验证码即可；仅当网络受限时，可从电脑浏览器复制抖音
 					Cookie 粘贴到此处作为备用方案。
 				</T>
 				<ThemeTextInput
@@ -246,7 +377,6 @@ export function DouyinLoginModal({
 
 export function DouyinCollectionModal({
 	visible,
-	kind,
 	likedIds,
 	playbackBusy,
 	currentSourceId,
@@ -257,7 +387,6 @@ export function DouyinCollectionModal({
 	onAddToPlaylist,
 }: {
 	visible: boolean
-	kind: 'favorite' | 'collection' | null
 	likedIds: ReadonlySet<string>
 	playbackBusy: boolean
 	currentSourceId: string | null
@@ -279,15 +408,12 @@ export function DouyinCollectionModal({
 	const requestSeq = useRef(0)
 
 	const loadInitial = useCallback(async () => {
-		if (!kind) return
+		if (!visible) return
 		const token = ++requestSeq.current
 		setLoading(true)
 		setError('')
 		try {
-			const res =
-				kind === 'favorite'
-					? await douyinSession.fetchFavorites('0', 20)
-					: await douyinSession.fetchCollections('0', 20)
+			const res = await douyinSession.fetchCollections('0', 20)
 			if (requestSeq.current !== token) return
 			setItems(res.items)
 			setCursor(res.nextCursor)
@@ -297,23 +423,20 @@ export function DouyinCollectionModal({
 			setError(
 				err instanceof Error && err.message
 					? err.message
-					: '读取抖音列表失败，请确认已登录抖音账号',
+					: '读取抖音音乐收藏失败，请确认已登录抖音账号',
 			)
 		} finally {
 			if (requestSeq.current === token) setLoading(false)
 		}
-	}, [kind])
+	}, [visible])
 
 	const loadNextPage = useCallback(async () => {
-		if (!kind || !hasMore || loading || loadingMore) return
+		if (!visible || !hasMore || loading || loadingMore) return
 		const token = requestSeq.current
 		setLoadingMore(true)
 		setError('')
 		try {
-			const res =
-				kind === 'favorite'
-					? await douyinSession.fetchFavorites(cursor, 20)
-					: await douyinSession.fetchCollections(cursor, 20)
+			const res = await douyinSession.fetchCollections(cursor, 20)
 			if (requestSeq.current !== token) return
 			setItems((prev) => {
 				const seen = new Set(prev.map((item) => item.id))
@@ -339,20 +462,20 @@ export function DouyinCollectionModal({
 		} finally {
 			if (requestSeq.current === token) setLoadingMore(false)
 		}
-	}, [cursor, hasMore, kind, loading, loadingMore])
+	}, [cursor, hasMore, loading, loadingMore, visible])
 
 	useEffect(() => {
-		if (visible && kind) {
+		if (visible) {
 			setItems([])
 			setCursor('0')
 			setHasMore(false)
 			void loadInitial()
 		}
-	}, [visible, kind, douyinState.status, loadInitial])
+	}, [visible, douyinState.status, loadInitial])
 
-	if (!visible || !kind) return null
+	if (!visible) return null
 
-	const title = kind === 'favorite' ? '抖音 · 我的喜欢' : '抖音 · 我的收藏'
+	const title = '抖音 · 音乐收藏'
 
 	return (
 		<Modal
@@ -386,7 +509,7 @@ export function DouyinCollectionModal({
 										size={12}
 										muted
 									>
-										登录抖音后即可同步「我的喜欢」与「我的收藏」，提取视频原声并在后台听歌。
+										登录抖音后即可直接读取你「收藏 -> 音乐」板块里的全部音乐与原声并在后台听歌。
 									</T>
 									<Button onPress={onOpenLogin}>扫码 / 手机号登录抖音</Button>
 								</Card>
@@ -449,7 +572,7 @@ export function DouyinCollectionModal({
 						) : error ? (
 							<State
 								mascot='error'
-								title='暂时无法读取列表'
+								title='暂时无法读取音乐收藏'
 								message={error}
 								retry={() => {
 									void loadInitial()
@@ -458,11 +581,11 @@ export function DouyinCollectionModal({
 						) : (
 							<State
 								mascot='empty'
-								title={`暂无${kind === 'favorite' ? '喜欢' : '收藏'}的抖音作品`}
+								title='暂无收藏的抖音音乐'
 								message={
 									douyinState.status === 'authenticated'
-										? '在抖音点赞或收藏音乐视频后，点击刷新即可同步原声。'
-										: '请先登录抖音账号以同步你的喜欢与收藏列表。'
+										? '在抖音 App 中收藏音乐或原声（收藏 -> 音乐）后，点击刷新即可同步播放。'
+										: '请先登录抖音账号以同步「收藏 -> 音乐」列表。'
 								}
 							/>
 						)
@@ -615,7 +738,7 @@ export function DouyinSearchSection({
 							size={12}
 							muted
 						>
-							支持直接粘贴抖音分享口令 / 短链（v.douyin.com）免登录提取原声后台播放，播放时自动联网同步歌词。
+							支持直接搜索歌曲 / 原声关键词，或粘贴抖音分享口令（v.douyin.com）提取音频，播放时自动联网同步歌词。
 						</T>
 					</View>
 				</View>
@@ -625,7 +748,7 @@ export function DouyinSearchSection({
 				>
 					{douyinState.status === 'authenticated'
 						? `抖音账号已连接${douyinState.nickname ? `（${douyinState.nickname}）` : ''}`
-						: '登录抖音账号（解锁关键词搜索与喜欢/收藏）'}
+						: '扫码 / 手机号连接抖音账号（同步音乐收藏）'}
 				</Button>
 			</Card>
 
@@ -633,7 +756,7 @@ export function DouyinSearchSection({
 				<State
 					mascot='search'
 					title='搜索或提取抖音原声'
-					message='在上方输入框粘贴抖音分享文本 / 短链，或输入抖音歌曲与视频关键词后点搜索。'
+					message='在上方输入框输入歌曲 / 原声关键词搜索，或直接粘贴抖音分享链接提取音频。'
 				/>
 			) : loading && items.length === 0 ? (
 				<State
@@ -654,7 +777,7 @@ export function DouyinSearchSection({
 				<State
 					mascot='search'
 					title='未找到匹配的抖音原声'
-					message='你可以直接从抖音点击「分享 -> 复制链接」粘贴到这里提取音频，或先登录抖音账号再试。'
+					message='请尝试更换关键词，或直接从抖音点击「分享 -> 复制链接」粘贴到这里提取音频。'
 				/>
 			) : (
 				<>
@@ -673,7 +796,7 @@ export function DouyinSearchSection({
 						>
 							{isShare
 								? '已提取抖音分享原声'
-								: `“${submittedQuery.trim()}”，已找到 ${items.length} 条抖音原声`}
+								: `“${submittedQuery.trim()}”，已找到 ${items.length} 条结果`}
 						</T>
 						<View style={{ flexDirection: 'row', gap: 8 }}>
 							<Button

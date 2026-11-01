@@ -33,6 +33,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
@@ -45,6 +46,7 @@ object DouyinManager {
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
     private const val DOUYIN_HOME = "https://www.douyin.com/"
     private const val STREAM_TTL_MS = 25 * 60 * 1000L
+    private const val FALLBACK_SONG_PREFIX = "990000"
 
     private data class CachedStream(val url: String, val savedAt: Long)
 
@@ -56,6 +58,13 @@ object DouyinManager {
     private var headlessReady = false
     private val requestSeq = AtomicInteger(1)
     private val pendingFetch = ConcurrentHashMap<Int, CompletableDeferred<String>>()
+
+    private val noRedirectClient by lazy {
+        OkHttpClientManager.okHttpClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
 
     fun normalizeHttps(raw: String?): String {
         val trimmed = raw?.trim().orEmpty()
@@ -132,14 +141,216 @@ object DouyinManager {
         }
     }
 
-    /** Interactive native WebView dialog that captures HttpOnly sessionid via CookieManager. */
+    /**
+     * Extracts the Douyin login QR code image (data:image/png;base64,...) directly from the
+     * background WebView so the user can scan immediately inside MeloCanvas without opening a full webpage.
+     */
+    suspend fun getLoginQrCode(context: Context): String {
+        val wv = ensureHeadlessWebView(context)
+            ?: return JSONObject().put("status", "error").put("message", "登录环境初始化失败").toString()
+
+        val id = requestSeq.getAndIncrement()
+        val deferred = CompletableDeferred<String>()
+        pendingFetch[id] = deferred
+
+        val js = """
+            (function() {
+                try {
+                    document.querySelectorAll('video, audio').forEach(function(m) {
+                        try { m.muted = true; m.pause(); } catch(e) {}
+                    });
+                    if (!window.__meloQrHooked) {
+                        window.__meloQrHooked = true;
+                        window.__meloLastQr = '';
+                        var origOpen = XMLHttpRequest.prototype.open;
+                        var origSend = XMLHttpRequest.prototype.send;
+                        XMLHttpRequest.prototype.open = function(m, u) {
+                            this.__meloUrl = String(u || '');
+                            return origOpen.apply(this, arguments);
+                        };
+                        XMLHttpRequest.prototype.send = function() {
+                            var self = this;
+                            this.addEventListener('load', function() {
+                                try {
+                                    if (self.__meloUrl && self.__meloUrl.indexOf('get_qrcode') >= 0) {
+                                        var j = JSON.parse(self.responseText || '{}');
+                                        if (j && j.data && j.data.qrcode) {
+                                            var q = String(j.data.qrcode);
+                                            window.__meloLastQr = q.indexOf('data:image') === 0 ? q : ('data:image/png;base64,' + q);
+                                        }
+                                    }
+                                } catch(e) {}
+                            });
+                            return origSend.apply(this, arguments);
+                        };
+                    }
+
+                    function findDomQr() {
+                        var imgs = document.querySelectorAll('img');
+                        for (var i = 0; i < imgs.length; i++) {
+                            var src = imgs[i].getAttribute('src') || imgs[i].src || '';
+                            if (src.indexOf('data:image/png;base64,') === 0 && src.length > 200) {
+                                return src;
+                            }
+                        }
+                        return window.__meloLastQr || '';
+                    }
+
+                    function clickRefreshOrLogin() {
+                        var all = document.querySelectorAll('button, div, span, a, p');
+                        for (var i = 0; i < all.length; i++) {
+                            var t = (all[i].innerText || '').trim();
+                            if (t === '点击刷新' || t === '二维码已失效' || t === '刷新二维码') {
+                                try { all[i].click(); } catch(e) {}
+                            }
+                        }
+                        for (var j = 0; j < all.length; j++) {
+                            var txt = (all[j].innerText || '').trim();
+                            if (txt === '扫码登录') {
+                                try { all[j].click(); } catch(e) {}
+                            }
+                        }
+                        var existing = findDomQr();
+                        if (!existing) {
+                            for (var k = 0; k < all.length; k++) {
+                                var lt = (all[k].innerText || '').trim();
+                                if (lt === '登录') {
+                                    try { all[k].click(); break; } catch(e) {}
+                                }
+                            }
+                        }
+                    }
+
+                    clickRefreshOrLogin();
+                    var attempts = 0;
+                    var timer = setInterval(function() {
+                        attempts++;
+                        document.querySelectorAll('video, audio').forEach(function(m) {
+                            try { m.muted = true; m.pause(); } catch(e) {}
+                        });
+                        var qr = findDomQr();
+                        if (qr) {
+                            clearInterval(timer);
+                            window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'ready', qrcode: qr }));
+                            return;
+                        }
+                        if (attempts === 4 || attempts === 10) {
+                            clickRefreshOrLogin();
+                        }
+                        if (attempts === 8) {
+                            try {
+                                var xhr = new XMLHttpRequest();
+                                xhr.open('GET', 'https://sso.douyin.com/get_qrcode/?service=https%3A%2F%2Fwww.douyin.com&need_logo=false&need_short_url=true&device_platform=web_app&aid=6383&account_sdk_source=sso&sdk_version=2.2.8-beta.0&language=zh', true);
+                                xhr.withCredentials = true;
+                                xhr.onload = function() {
+                                    try {
+                                        var r = JSON.parse(xhr.responseText || '{}');
+                                        if (r && r.data && r.data.qrcode) {
+                                            var raw = String(r.data.qrcode);
+                                            window.__meloLastQr = raw.indexOf('data:image') === 0 ? raw : ('data:image/png;base64,' + raw);
+                                        }
+                                    } catch(e) {}
+                                };
+                                xhr.send();
+                            } catch(e) {}
+                        }
+                        if (attempts >= 22) {
+                            clearInterval(timer);
+                            window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'empty', qrcode: '' }));
+                        }
+                    }, 220);
+                } catch (err) {
+                    window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'error', qrcode: '' }));
+                }
+            })();
+        """.trimIndent()
+
+        withContext(Dispatchers.Main) {
+            wv.evaluateJavascript(js, null)
+        }
+        val res = withTimeoutOrNull(7500L) { deferred.await() }
+            ?: JSONObject().put("status", "timeout").put("qrcode", "").toString()
+        pendingFetch.remove(id)
+        return res
+    }
+
+    /**
+     * Polls whether the QR code in the background WebView has been scanned/confirmed and returns
+     * either the captured Cookie or the updated QR status.
+     */
+    suspend fun pollLoginQrStatus(context: Context): String {
+        val cm = CookieManager.getInstance()
+        val currentCookie = runCatching { cm.getCookie(DOUYIN_HOME).orEmpty() }.getOrDefault("")
+        if (hasSessionCookie(currentCookie)) {
+            douyinCookie = currentCookie
+            runCatching { cm.flush() }
+            return JSONObject().apply {
+                put("status", "authenticated")
+                put("cookie", currentCookie)
+            }.toString()
+        }
+
+        val wv = headlessWebView ?: return JSONObject().put("status", "waiting").toString()
+        val id = requestSeq.getAndIncrement()
+        val deferred = CompletableDeferred<String>()
+        pendingFetch[id] = deferred
+
+        val js = """
+            (function() {
+                try {
+                    document.querySelectorAll('video, audio').forEach(function(m) {
+                        try { m.muted = true; m.pause(); } catch(e) {}
+                    });
+                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+                    var qr = '';
+                    var imgs = document.querySelectorAll('img');
+                    for (var i = 0; i < imgs.length; i++) {
+                        var src = imgs[i].getAttribute('src') || imgs[i].src || '';
+                        if (src.indexOf('data:image/png;base64,') === 0 && src.length > 200) {
+                            qr = src;
+                            break;
+                        }
+                    }
+                    if (bodyText.indexOf('扫码成功') >= 0 || bodyText.indexOf('请在手机上确认') >= 0) {
+                        window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'scanned', qrcode: qr }));
+                        return;
+                    }
+                    if (bodyText.indexOf('二维码已失效') >= 0 || bodyText.indexOf('点击刷新') >= 0) {
+                        var all = document.querySelectorAll('button, div, span, a, p');
+                        for (var j = 0; j < all.length; j++) {
+                            var t = (all[j].innerText || '').trim();
+                            if (t === '点击刷新' || t === '二维码已失效') {
+                                try { all[j].click(); } catch(e) {}
+                            }
+                        }
+                        window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'expired', qrcode: qr }));
+                        return;
+                    }
+                    window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'waiting', qrcode: qr }));
+                } catch(e) {
+                    window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'waiting', qrcode: '' }));
+                }
+            })();
+        """.trimIndent()
+
+        withContext(Dispatchers.Main) {
+            wv.evaluateJavascript(js, null)
+        }
+        val res = withTimeoutOrNull(2500L) { deferred.await() }
+            ?: JSONObject().put("status", "waiting").toString()
+        pendingFetch.remove(id)
+        return res
+    }
+
+    /**
+     * Clean interactive login dialog for single-phone SMS code login (background videos muted/hidden).
+     */
     suspend fun openLoginDialog(activity: Activity): String = withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { continuation ->
             var finished = false
             val handler = Handler(Looper.getMainLooper())
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
-            // Clear stale session cookies before interactive login so re-login never closes prematurely.
             for (key in listOf("sessionid", "sessionid_ss", "sid_tt", "uid_tt", "sid_guard")) {
                 cm.setCookie("https://www.douyin.com", "$key=; Domain=.douyin.com; Path=/; Max-Age=0")
                 cm.setCookie(DOUYIN_HOME, "$key=; Path=/; Max-Age=0")
@@ -163,7 +374,6 @@ object DouyinManager {
                 activity.resources.displayMetrics,
             ).toInt()
 
-            var desktopMode = true
             val webView = WebView(activity)
 
             fun finishWith(result: String) {
@@ -191,25 +401,11 @@ object DouyinManager {
             }
 
             val titleView = TextView(activity).apply {
-                text = "登录抖音（扫码 / 短信）"
+                text = "抖音手机号 / 验证码登录"
                 setTextColor(Color.WHITE)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 typeface = Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val modeBtn = TextView(activity).apply {
-                text = "切触屏版"
-                setTextColor(Color.parseColor("#A5B4FC"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
-                setOnClickListener {
-                    desktopMode = !desktopMode
-                    val nextLabel: CharSequence = if (desktopMode) "切触屏版" else "切扫码版"
-                    text = nextLabel
-                    webView.settings.userAgentString = if (desktopMode) DESKTOP_UA else MOBILE_UA
-                    webView.loadUrl(DOUYIN_HOME)
-                }
             }
 
             val doneBtn = TextView(activity).apply {
@@ -234,17 +430,50 @@ object DouyinManager {
             }
 
             header.addView(titleView)
-            header.addView(modeBtn)
             header.addView(doneBtn)
             header.addView(closeBtn)
 
             val hintBar = TextView(activity).apply {
-                text = "提示：若页面右上角有「登录」按钮请点击登录；支持抖音 App 扫码或手机号验证码，登录成功后会自动返回。"
+                text = "已自动静音并屏蔽背景视频，请直接输入手机号获取验证码登录，成功后将自动返回。"
                 setTextColor(Color.parseColor("#D1D5DB"))
                 setBackgroundColor(Color.parseColor("#252836"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setPadding(dp(14), dp(8), dp(14), dp(8))
             }
+
+            val cleanLoginJs = """
+                (function() {
+                    if (window.__meloCleanDialogStarted) return;
+                    window.__meloCleanDialogStarted = true;
+                    var style = document.createElement('style');
+                    style.innerHTML = 'video, audio, xg-video-container, [data-e2e="feed-active-video"] { display: none !important; opacity: 0 !important; pointer-events: none !important; } body { background: #121318 !important; }';
+                    if (document.head) document.head.appendChild(style);
+                    var switchedToSms = false;
+                    setInterval(function() {
+                        if (document.head && !style.parentNode) document.head.appendChild(style);
+                        document.querySelectorAll('video, audio').forEach(function(m) {
+                            try { m.muted = true; m.pause(); m.remove(); } catch(e) {}
+                        });
+                        var nodes = document.querySelectorAll('button, div, span, a');
+                        if (!switchedToSms) {
+                            for (var i = 0; i < nodes.length; i++) {
+                                var t = (nodes[i].innerText || '').trim();
+                                if (t === '验证码登录') {
+                                    try { nodes[i].click(); switchedToSms = true; break; } catch(e) {}
+                                }
+                            }
+                        }
+                        if (!switchedToSms) {
+                            for (var j = 0; j < nodes.length; j++) {
+                                var lt = (nodes[j].innerText || '').trim();
+                                if (lt === '登录') {
+                                    try { nodes[j].click(); break; } catch(e) {}
+                                }
+                            }
+                        }
+                    }, 400);
+                })();
+            """.trimIndent()
 
             cm.setAcceptThirdPartyCookies(webView, true)
             webView.settings.apply {
@@ -257,11 +486,13 @@ object DouyinManager {
                 loadWithOverviewMode = true
                 builtInZoomControls = true
                 displayZoomControls = false
+                mediaPlaybackRequiresUserGesture = true
             }
             webView.webChromeClient = WebChromeClient()
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    view?.evaluateJavascript(cleanLoginJs, null)
                     val current = cm.getCookie(DOUYIN_HOME).orEmpty()
                     if (hasSessionCookie(current)) {
                         finishWith(current)
@@ -283,12 +514,13 @@ object DouyinManager {
             val pollRunnable = object : Runnable {
                 override fun run() {
                     if (finished) return
+                    webView.evaluateJavascript(cleanLoginJs, null)
                     val current = cm.getCookie(DOUYIN_HOME).orEmpty()
                     if (hasSessionCookie(current)) {
                         finishWith(current)
                         return
                     }
-                    handler.postDelayed(this, 1200L)
+                    handler.postDelayed(this, 1000L)
                 }
             }
 
@@ -297,7 +529,7 @@ object DouyinManager {
             dialog.setOnDismissListener { finishWith("") }
             dialog.show()
             webView.loadUrl(DOUYIN_HOME)
-            handler.postDelayed(pollRunnable, 1500L)
+            handler.postDelayed(pollRunnable, 1200L)
 
             continuation.invokeOnCancellation {
                 handler.post { finishWith("") }
@@ -328,6 +560,7 @@ object DouyinManager {
                     domStorageEnabled = true
                     userAgentString = DESKTOP_UA
                     mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    mediaPlaybackRequiresUserGesture = true
                 }
                 created.addJavascriptInterface(JsBridge(), "MeloDouyinBridge")
                 headlessWebView = created
@@ -335,6 +568,10 @@ object DouyinManager {
             wv.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    view?.evaluateJavascript(
+                        "document.querySelectorAll('video,audio').forEach(function(m){try{m.muted=true;m.pause();}catch(e){}});",
+                        null,
+                    )
                     headlessReady = true
                     if (!readyDeferred.isCompleted) readyDeferred.complete(true)
                 }
@@ -348,8 +585,8 @@ object DouyinManager {
     }
 
     /**
-     * Executes a Douyin web API endpoint inside www.douyin.com WebView context so bdms/a_bogus
-     * and HttpOnly cookies are automatically attached, with OkHttp fallback.
+     * Executes a Douyin web API endpoint inside www.douyin.com WebView context using XMLHttpRequest
+     * so ByteDance's bdms SDK automatically signs a_bogus and attaches HttpOnly cookies.
      */
     suspend fun apiRequest(context: Context, endpoint: String): String {
         val isPost = endpoint.startsWith("POST:")
@@ -360,48 +597,13 @@ object DouyinManager {
         val normalizedEndpoint = if (rawPath.startsWith("http")) rawPath else {
             "https://www.douyin.com" + (if (rawPath.startsWith("/")) rawPath else "/$rawPath")
         }
-        val webBody = runCatching {
-            val wv = ensureHeadlessWebView(context)
-            if (wv != null) {
-                val id = requestSeq.getAndIncrement()
-                val deferred = CompletableDeferred<String>()
-                pendingFetch[id] = deferred
-                val escapedUrl = JSONObject.quote(normalizedEndpoint)
-                val escapedBody = JSONObject.quote(postBody)
-                val fetchOptions = if (isPost) {
-                    """{
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: {
-                            'Accept': 'application/json, text/plain, */*',
-                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                        },
-                        body: $escapedBody
-                    }"""
-                } else {
-                    """{
-                        method: 'GET',
-                        credentials: 'include',
-                        headers: { 'Accept': 'application/json, text/plain, */*' }
-                    }"""
-                }
-                val js = """
-                    (function() {
-                        fetch($escapedUrl, $fetchOptions)
-                        .then(function(r) { return r.text(); })
-                        .then(function(t) { window.MeloDouyinBridge.onResult($id, t || ''); })
-                        .catch(function(e) { window.MeloDouyinBridge.onResult($id, ''); });
-                    })();
-                """.trimIndent()
-                withContext(Dispatchers.Main) {
-                    wv.evaluateJavascript(js, null)
-                }
-                val res = withTimeoutOrNull(14000L) { deferred.await() }.orEmpty()
-                pendingFetch.remove(id)
-                res
-            } else ""
-        }.getOrDefault("")
 
+        // Intercept search requests with dual-engine fallback (Plan B)
+        if (normalizedEndpoint.contains("/aweme/v1/web/search/item/")) {
+            return executeSearchWithFallback(context, normalizedEndpoint)
+        }
+
+        val webBody = executeWebViewXhr(context, normalizedEndpoint, isPost, postBody)
         if (webBody.trim().startsWith("{")) {
             return webBody
         }
@@ -410,6 +612,309 @@ object DouyinManager {
             if (isPost) directPost(normalizedEndpoint, postBody) else directGet(normalizedEndpoint)
         }
     }
+
+    private suspend fun executeWebViewXhr(
+        context: Context,
+        normalizedEndpoint: String,
+        isPost: Boolean,
+        postBody: String,
+        refererPath: String? = null,
+    ): String = runCatching {
+        val wv = ensureHeadlessWebView(context) ?: return@runCatching ""
+        val id = requestSeq.getAndIncrement()
+        val deferred = CompletableDeferred<String>()
+        pendingFetch[id] = deferred
+        val escapedUrl = JSONObject.quote(normalizedEndpoint)
+        val escapedBody = JSONObject.quote(postBody)
+        val escapedReferer = JSONObject.quote(refererPath.orEmpty())
+        val method = if (isPost) "POST" else "GET"
+
+        val js = """
+            (function() {
+                try {
+                    document.querySelectorAll('video, audio').forEach(function(m) {
+                        try { m.muted = true; m.pause(); } catch(e) {}
+                    });
+                    var ref = $escapedReferer;
+                    if (ref) {
+                        try { history.replaceState(null, '', ref); } catch(e) {}
+                    }
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('$method', $escapedUrl, true);
+                    xhr.withCredentials = true;
+                    xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
+                    if (${if (isPost) "true" else "false"}) {
+                        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+                    }
+                    xhr.onload = function() {
+                        window.MeloDouyinBridge.onResult($id, xhr.responseText || '');
+                    };
+                    xhr.onerror = function() {
+                        window.MeloDouyinBridge.onResult($id, '');
+                    };
+                    xhr.ontimeout = function() {
+                        window.MeloDouyinBridge.onResult($id, '');
+                    };
+                    xhr.timeout = 11000;
+                    xhr.send(${if (isPost) escapedBody else "null"});
+                } catch (e) {
+                    window.MeloDouyinBridge.onResult($id, '');
+                }
+            })();
+        """.trimIndent()
+
+        withContext(Dispatchers.Main) {
+            wv.evaluateJavascript(js, null)
+        }
+        val res = withTimeoutOrNull(12500L) { deferred.await() }.orEmpty()
+        pendingFetch.remove(id)
+        res
+    }.getOrDefault("")
+
+    /**
+     * Plan B Dual-Engine Search:
+     * 1. Signed Douyin Web XHR search (/aweme/v1/web/search/item/ with full PC web params).
+     * 2. If unauthenticated or blocked by slider captcha (0 items), seamlessly falls back to
+     *    ByteDance/Toutiao short video original sound search + Cloud Music playable audio search.
+     */
+    private suspend fun executeSearchWithFallback(context: Context, endpoint: String): String {
+        val keyword = extractQueryParam(endpoint, "keyword")
+        val offset = extractQueryParam(endpoint, "offset").toIntOrNull() ?: 0
+        val count = (extractQueryParam(endpoint, "count").toIntOrNull() ?: 18).coerceIn(6, 30)
+        val encodedKw = URLEncoder.encode(keyword, "UTF-8")
+
+        val fullDouyinSearchUrl =
+            "https://www.douyin.com/aweme/v1/web/search/item/" +
+                "?device_platform=webapp&aid=6383&channel=channel_pc_web" +
+                "&search_channel=aweme_video_web&enable_history=1" +
+                "&keyword=$encodedKw&search_source=normal_search" +
+                "&query_correct_type=1&is_filter_search=0&from_group_id=" +
+                "&offset=$offset&count=$count&need_filter_settings=1&list_type=single" +
+                "&version_code=190600&version_name=19.6.0"
+
+        val webRes = executeWebViewXhr(
+            context = context,
+            normalizedEndpoint = fullDouyinSearchUrl,
+            isPost = false,
+            postBody = "",
+            refererPath = "/search/$encodedKw?type=video",
+        )
+
+        if (webRes.trim().startsWith("{")) {
+            val hasValidItems = runCatching {
+                val root = JSONObject(webRes)
+                val dataArr = root.optJSONArray("data") ?: root.optJSONArray("aweme_list")
+                if (dataArr != null && dataArr.length() > 0) {
+                    var validCount = 0
+                    for (i in 0 until dataArr.length()) {
+                        val item = dataArr.optJSONObject(i) ?: continue
+                        val aweme = item.optJSONObject("aweme_info") ?: item
+                        if (aweme.optString("aweme_id").isNotBlank()) validCount++
+                    }
+                    validCount > 0
+                } else false
+            }.getOrDefault(false)
+
+            if (hasValidItems) {
+                return webRes
+            }
+        }
+
+        // Engine 2: Fallback to ByteDance / Toutiao video original sound + Cloud Music playable streams
+        return withContext(Dispatchers.IO) {
+            val combined = JSONArray()
+            val seenIds = HashSet<String>()
+
+            runCatching {
+                val toutiaoItems = searchToutiaoDouyinVideos(keyword, offset / count)
+                for (i in 0 until toutiaoItems.length()) {
+                    val item = toutiaoItems.optJSONObject(i) ?: continue
+                    val id = item.optString("aweme_id")
+                    if (id.isNotBlank() && seenIds.add(id)) {
+                        combined.put(item)
+                    }
+                }
+            }
+
+            if (combined.length() < count) {
+                runCatching {
+                    val cloudItems = searchCloudPlayableAudio(keyword, offset, count)
+                    for (i in 0 until cloudItems.length()) {
+                        val item = cloudItems.optJSONObject(i) ?: continue
+                        val id = item.optString("aweme_id")
+                        if (id.isNotBlank() && seenIds.add(id)) {
+                            combined.put(item)
+                        }
+                    }
+                }
+            }
+
+            JSONObject().apply {
+                put("status_code", 0)
+                put("has_more", if (combined.length() > 0) 1 else 0)
+                put("cursor", offset + count)
+                put("aweme_list", combined)
+            }.toString()
+        }
+    }
+
+    private fun extractQueryParam(url: String, key: String): String {
+        val regex = Regex("[?&]$key=([^&#]*)")
+        val raw = regex.find(url)?.groupValues?.get(1).orEmpty()
+        return runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+    }
+
+    private fun searchToutiaoDouyinVideos(keyword: String, page: Int): JSONArray {
+        val result = JSONArray()
+        val query = if (keyword.contains("抖音")) keyword else "$keyword 抖音"
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val url = "https://so.toutiao.com/search?keyword=$encoded&pd=synthesis&source=input&page_num=$page"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", DESKTOP_UA)
+            .build()
+        val html = OkHttpClientManager.okHttpClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return result
+            res.body?.string().orEmpty()
+        }
+
+        val scriptRegex = Regex("""<script[^>]*data-for="ala-data"[^>]*>(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+        val dataRegex = Regex("""\{\s*data:\s*(\{.*\})\s*,\s*src_id:\s*"""", RegexOption.DOT_MATCHES_ALL)
+
+        for (match in scriptRegex.findAll(html)) {
+            val scriptContent = match.groupValues[1]
+            val dataMatch = dataRegex.find(scriptContent) ?: continue
+            val d = runCatching { JSONObject(dataMatch.groupValues[1]) }.getOrNull() ?: continue
+            val rd = d.optJSONObject("raw_data") ?: continue
+            val music = rd.optJSONObject("music")
+            val video = rd.optJSONObject("video")
+
+            var playUrl = normalizeHttps(music?.optString("play_url"))
+            if (!playUrl.startsWith("https://")) {
+                playUrl = firstHttpsUrl(video?.optJSONObject("play_addr"))
+            }
+            if (!playUrl.startsWith("https://")) {
+                val addrList = video?.optJSONArray("play_addr_list")
+                if (addrList != null && addrList.length() > 0) {
+                    val urls = addrList.optJSONObject(0)?.optJSONArray("play_url_list")
+                    if (urls != null && urls.length() > 0) {
+                        playUrl = normalizeHttps(urls.optString(0))
+                    }
+                }
+            }
+            if (!playUrl.startsWith("https://")) continue
+
+            val awemeId = rd.optString("original_douyin_iid")
+                .ifBlank { rd.optString("item_id") }
+                .ifBlank { d.optString("group_id") }
+                .trim()
+            if (!DouyinAudioIdentity.validId(awemeId)) continue
+
+            val rawTitle = rd.optString("title").ifBlank { d.optString("title") }
+                .replace(Regex("<[^>]+>"), "")
+                .trim()
+            val musicTitle = music?.optString("title")?.trim().orEmpty()
+            val author = d.optJSONObject("info")?.optString("user_nickname")
+                .orEmpty()
+                .ifBlank { music?.optString("author").orEmpty() }
+                .ifBlank { "抖音原声" }
+            val cover = normalizeHttps(
+                d.optString("thumbnail_url")
+                    .ifBlank { d.optString("large_thumbnail_url") }
+                    .ifBlank { music?.optString("album_cover").orEmpty() },
+            )
+            val dur = video?.optDouble("duration", 0.0)?.takeIf { it > 0 }
+                ?: d.optDouble("duration", 0.0)
+
+            registerStream(awemeId, playUrl)
+            result.put(
+                JSONObject().apply {
+                    put("aweme_id", awemeId)
+                    put("title", rawTitle.ifBlank { musicTitle.ifBlank { keyword } })
+                    put("desc", rawTitle)
+                    put("artist", author)
+                    put("artwork", cover)
+                    put("duration", dur)
+                    put("audioUrl", playUrl)
+                },
+            )
+        }
+        return result
+    }
+
+    private fun searchCloudPlayableAudio(keyword: String, offset: Int, count: Int): JSONArray {
+        val result = JSONArray()
+        val encoded = URLEncoder.encode(keyword, "UTF-8")
+        val url = "https://music.163.com/api/cloudsearch/pc?s=$encoded&type=1&offset=$offset&limit=${count * 2}"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", DESKTOP_UA)
+            .header("Referer", "https://music.163.com/")
+            .build()
+        val body = OkHttpClientManager.okHttpClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return result
+            res.body?.string().orEmpty()
+        }
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return result
+        val songs = root.optJSONObject("result")?.optJSONArray("songs") ?: return result
+
+        for (i in 0 until songs.length()) {
+            if (result.length() >= count) break
+            val song = songs.optJSONObject(i) ?: continue
+            val fee = song.optInt("fee", 0)
+            if (fee == 1 || fee == 4) continue
+            val songId = song.optLong("id", 0L)
+            if (songId <= 0L) continue
+
+            val awemeId = "$FALLBACK_SONG_PREFIX$songId"
+            if (!DouyinAudioIdentity.validId(awemeId)) continue
+
+            val name = song.optString("name").trim()
+            if (name.isEmpty()) continue
+
+            val artistsArr = song.optJSONArray("ar") ?: song.optJSONArray("artists")
+            val artistNames = mutableListOf<String>()
+            if (artistsArr != null) {
+                for (j in 0 until artistsArr.length()) {
+                    val arName = artistsArr.optJSONObject(j)?.optString("name")?.trim().orEmpty()
+                    if (arName.isNotEmpty()) artistNames.add(arName)
+                }
+            }
+            val artist = if (artistNames.isNotEmpty()) artistNames.joinToString(" / ") else "抖音原声"
+            val album = song.optJSONObject("al") ?: song.optJSONObject("album")
+            val cover = normalizeHttps(album?.optString("picUrl"))
+            val durationMs = song.optDouble("dt", song.optDouble("duration", 0.0))
+            val durationSeconds = if (durationMs > 1000.0) durationMs / 1000.0 else durationMs
+            val outerUrl = "https://music.163.com/song/media/outer/url?id=$songId.mp3"
+
+            result.put(
+                JSONObject().apply {
+                    put("aweme_id", awemeId)
+                    put("title", name)
+                    put("desc", "$name - $artist")
+                    put("artist", artist)
+                    put("artwork", cover)
+                    put("duration", durationSeconds)
+                    put("audioUrl", outerUrl)
+                },
+            )
+        }
+        return result
+    }
+
+    private fun resolveNeteaseOuterUrl(songId: String): String? = runCatching {
+        val req = Request.Builder()
+            .url("https://music.163.com/song/media/outer/url?id=$songId.mp3")
+            .header("User-Agent", DESKTOP_UA)
+            .header("Referer", "https://music.163.com/")
+            .build()
+        noRedirectClient.newCall(req).execute().use { res ->
+            val loc = normalizeHttps(res.header("Location"))
+            if (loc.startsWith("https://") && !loc.endsWith("/404")) {
+                loc
+            } else null
+        }
+    }.getOrNull()
 
     private fun currentMergedCookie(): String {
         val cmCookie = runCatching { CookieManager.getInstance().getCookie(DOUYIN_HOME).orEmpty() }.getOrDefault("")
@@ -490,7 +995,7 @@ object DouyinManager {
 
         // 2. Also try signed WebView detail API for higher-bitrate pure music.play_url
         val detailItem = runCatching {
-            val detailBody = apiRequest(context, "/aweme/v1/web/aweme/detail/?aweme_id=$resolvedId&aid=6383")
+            val detailBody = apiRequest(context, "/aweme/v1/web/aweme/detail/?device_platform=webapp&aweme_id=$resolvedId&aid=6383")
             if (detailBody.trim().startsWith("{")) {
                 JSONObject(detailBody).optJSONObject("aweme_detail")
             } else null
@@ -512,12 +1017,25 @@ object DouyinManager {
         require(DouyinAudioIdentity.validId(awemeId)) { "Invalid Douyin awemeId" }
         val now = System.currentTimeMillis()
         streamCache[awemeId]?.let { cached ->
-            if (now - cached.savedAt < STREAM_TTL_MS && cached.url.startsWith("https://")) {
+            if (now - cached.savedAt < STREAM_TTL_MS &&
+                cached.url.startsWith("https://") &&
+                !cached.url.contains("music.163.com/song/media/outer/url")
+            ) {
                 return cached.url
             }
         }
 
-        // Re-resolve fresh stream URL via mobile share page or web detail endpoint
+        // 0. If this is a fallback cloud audio ID (990000<songId>), resolve its 302 HTTPS stream directly
+        if (awemeId.startsWith(FALLBACK_SONG_PREFIX) && awemeId.length > FALLBACK_SONG_PREFIX.length) {
+            val songId = awemeId.removePrefix(FALLBACK_SONG_PREFIX)
+            val resolvedOuter = resolveNeteaseOuterUrl(songId)
+            if (resolvedOuter != null) {
+                registerStream(awemeId, resolvedOuter)
+                return resolvedOuter
+            }
+        }
+
+        // 1. Re-resolve fresh stream URL via mobile share page
         val shareItem = runCatching { fetchSharePageItem(awemeId) }.getOrNull()
         if (shareItem != null) {
             val normalized = normalizeAwemeObject(shareItem, awemeId)
@@ -528,8 +1046,9 @@ object DouyinManager {
             }
         }
 
+        // 2. Try web video detail endpoint
         val webDetailItem = runCatching {
-            val raw = directGet("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=$awemeId&aid=6383")
+            val raw = directGet("https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aweme_id=$awemeId&aid=6383")
             if (raw.trim().startsWith("{")) JSONObject(raw).optJSONObject("aweme_detail") else null
         }.getOrNull()
         if (webDetailItem != null) {
@@ -541,8 +1060,32 @@ object DouyinManager {
             }
         }
 
-        // Fall back to stale cached URL if still present
-        streamCache[awemeId]?.url?.takeIf { it.startsWith("https://") }?.let { return it }
+        // 3. Try web music detail endpoint (for collected music items from /aweme/v1/web/music/listcollection/)
+        val musicDetailUrl = runCatching {
+            val raw = directGet("https://www.douyin.com/aweme/v1/web/music/detail/?device_platform=webapp&music_id=$awemeId&aid=6383")
+            if (raw.trim().startsWith("{")) {
+                val musicInfo = JSONObject(raw).optJSONObject("music_info")
+                firstHttpsUrl(musicInfo?.optJSONObject("play_url"))
+            } else ""
+        }.getOrDefault("")
+        if (musicDetailUrl.startsWith("https://")) {
+            registerStream(awemeId, musicDetailUrl)
+            return musicDetailUrl
+        }
+
+        // 4. Fall back to cached URL if still present (resolving 302 if it's an outer URL)
+        streamCache[awemeId]?.url?.takeIf { it.startsWith("https://") }?.let { cachedUrl ->
+            if (cachedUrl.contains("music.163.com/song/media/outer/url")) {
+                val sid = Regex("id=([0-9]+)").find(cachedUrl)?.groupValues?.get(1)
+                if (!sid.isNullOrBlank()) {
+                    resolveNeteaseOuterUrl(sid)?.let { fresh ->
+                        registerStream(awemeId, fresh)
+                        return fresh
+                    }
+                }
+            }
+            return cachedUrl
+        }
         throw IOException("抖音原声直链已过期或不可读取，请重新搜索或登录抖音后重试")
     }
 

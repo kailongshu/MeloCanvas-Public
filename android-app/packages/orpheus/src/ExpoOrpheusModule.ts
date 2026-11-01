@@ -386,6 +386,8 @@ declare class NativeOrpheusModule extends NativeModule<OrpheusEvents> {
 	setBilibiliOfflineAccess(enabled: boolean): void
 	setGuestPlaybackAccess(enabled: boolean): void
 	openDouyinLogin(): Promise<string>
+	douyinGetQrCode(): Promise<string>
+	douyinPollQrStatus(): Promise<string>
 	setDouyinCookie(cookie: string): void
 	clearDouyinCookie(): void
 	douyinApiRequest(endpoint: string): Promise<string>

@@ -530,6 +530,18 @@ class ExpoOrpheusModule : Module() {
             DouyinManager.openLoginDialog(activity)
         }
 
+        AsyncFunction("douyinGetQrCode") Coroutine { ->
+            val context = cachedAppContext ?: appContext.reactContext
+                ?: throw IllegalStateException("应用上下文不可用")
+            DouyinManager.getLoginQrCode(context)
+        }
+
+        AsyncFunction("douyinPollQrStatus") Coroutine { ->
+            val context = cachedAppContext ?: appContext.reactContext
+                ?: throw IllegalStateException("应用上下文不可用")
+            DouyinManager.pollLoginQrStatus(context)
+        }
+
         Function("setDouyinCookie") { cookie: String ->
             DouyinManager.setCookie(cookie)
         }
