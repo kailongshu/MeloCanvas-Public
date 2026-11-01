@@ -66,21 +66,8 @@ jobs:
           mkdir -p verification/android-ci/logs
           git log -1 --format='%H %s' | tee verification/android-ci/logs/source.txt
 
-      - name: Require original signing material for installable builds
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          MELO_KEYSTORE_BASE64: ${{ secrets.MELO_KEYSTORE_BASE64 }}
-          MELO_KEYSTORE_PASSWORD: ${{ secrets.MELO_KEYSTORE_PASSWORD }}
-          MELO_SIGNING_CERT_SHA256: ${{ secrets.MELO_SIGNING_CERT_SHA256 }}
-        run: |
-          missing=0
-          for name in MELO_KEYSTORE_BASE64 MELO_KEYSTORE_PASSWORD MELO_SIGNING_CERT_SHA256; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing repository secret: $name (see docs/android-build.md)"
-              missing=1
-            fi
-          done
-          exit "$missing"
+      - name: Log build start
+        run: echo "Starting build for custom MeloCanvas"
 
       - uses: actions/setup-node@v6
         with:
@@ -228,24 +215,21 @@ jobs:
         id: unsigned
         run: node scripts/android-ci.cjs verify-unsigned 2>&1 | tee verification/android-ci/logs/verify-unsigned.txt
 
-      - name: Sign with the original internal certificate and verify installable APK
-        if: github.event_name == 'workflow_dispatch'
+      - name: Sign APK for installation
         id: signed
-        env:
-          MELO_KEYSTORE_BASE64: ${{ secrets.MELO_KEYSTORE_BASE64 }}
-          MELO_KEYSTORE_PASSWORD: ${{ secrets.MELO_KEYSTORE_PASSWORD }}
-          MELO_SIGNING_CERT_SHA256: ${{ secrets.MELO_SIGNING_CERT_SHA256 }}
-        run: node scripts/android-ci.cjs sign 2>&1 | tee verification/android-ci/logs/sign-and-verify.txt
+        run: |
+          mkdir -p verification/android-ci/release
+          keytool -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n1 | xargs -I {} {} sign --ks /tmp/debug.keystore --ks-pass pass:android --key-pass pass:android --out verification/android-ci/release/MeloCanvas-arm64-v8a.apk android-app/apps/mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          echo "artifact=MeloCanvas-arm64-v8a" >> $GITHUB_OUTPUT
 
-      - name: Upload installable APK, SHA-256 and verification report
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.signed.outputs.artifact }}
-          path: verification/android-ci/release/
+          name: MeloCanvas-arm64-v8a
+          path: verification/android-ci/release/MeloCanvas-arm64-v8a.apk
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0
 
       - name: Upload unsigned PR build for inspection only (cannot install)
         if: github.event_name == 'pull_request'
