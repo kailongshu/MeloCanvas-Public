@@ -2,6 +2,8 @@ name: Android ARM64 Release APK
 run-name: Android ARM64 — ${{ inputs.source_ref || github.head_ref || github.ref_name }}
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       source_ref:
