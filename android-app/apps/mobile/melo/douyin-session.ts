@@ -552,62 +552,131 @@ export class DouyinSession {
 	}
 
 	/**
-	 * Reads ONLY the "音乐" (Collected Music) section of Douyin Collections
-	 * (/aweme/v1/web/music/listcollection/).
+	 * Reads Douyin Collections.
+	 * Supports both:
+	 * 1. 音乐收藏 (Collected Music: /aweme/v1/web/music/listcollection/)
+	 * 2. 视频收藏 (Collected Videos/Original Sounds: /aweme/v1/web/aweme/listcollection/)
+	 * In 'all' mode: attempts music collection first; if empty or fails, falls back to video collection.
 	 */
 	async fetchCollections(
 		cursor = '0',
 		count = 20,
-	): Promise<{ items: DouyinAudio[]; nextCursor: string; hasMore: boolean }> {
-		const postSpec = `POST:/aweme/v1/web/music/listcollection/?device_platform=webapp&aid=6383&channel=channel_pc_web|count=${count}&cursor=${encodeURIComponent(cursor)}`
-		let raw = ''
-		try {
-			raw = await Orpheus.douyinApiRequest(postSpec)
-		} catch {
-			raw = ''
-		}
-		if (!raw.trim().startsWith('{')) {
-			raw = await Orpheus.douyinApiRequest(
-				`/aweme/v1/web/music/listcollection/?device_platform=webapp&aid=6383&channel=channel_pc_web&count=${count}&cursor=${encodeURIComponent(cursor)}`,
-			)
-		}
-		const res = safeParseDouyinJson(raw)
-		const list = Array.isArray(res.mc_list)
-			? res.mc_list
-			: Array.isArray(res.music_list)
-				? res.music_list
-				: Array.isArray(res.aweme_list)
-					? res.aweme_list
+		mode: 'all' | 'music' | 'video' = 'all',
+	): Promise<{
+		items: DouyinAudio[]
+		nextCursor: string
+		hasMore: boolean
+		actualMode: 'music' | 'video'
+	}> {
+		const fetchMusic = async (cur: string) => {
+			const endpoint = `/aweme/v1/web/music/listcollection/?device_platform=webapp&aid=6383&channel=channel_pc_web&count=${count}&cursor=${encodeURIComponent(cur)}`
+			const raw = await Orpheus.douyinApiRequest(endpoint)
+			const res = safeParseDouyinJson(raw)
+			const list = Array.isArray(res.mc_list)
+				? res.mc_list
+				: Array.isArray(res.music_list)
+					? res.music_list
 					: Array.isArray(res.items)
 						? res.items
 						: []
-		if (
-			Number(res.status_code ?? 0) !== 0 &&
-			!Array.isArray(res.mc_list) &&
-			!Array.isArray(res.music_list)
-		) {
-			const msg =
-				typeof res.status_msg === 'string' && res.status_msg
-					? res.status_msg
-					: '暂时无法读取抖音「收藏 · 音乐」，请确认已登录抖音账号'
-			throw new Error(msg)
+			const statusCode = Number(res.status_code ?? 0)
+			if (
+				statusCode !== 0 &&
+				!Array.isArray(res.mc_list) &&
+				!Array.isArray(res.music_list)
+			) {
+				const msg =
+					typeof res.status_msg === 'string' && res.status_msg
+						? res.status_msg
+						: '读取抖音音乐收藏失败，请确认已登录抖音账号'
+				throw new Error(msg)
+			}
+			const now = Date.now()
+			const items: DouyinAudio[] = []
+			const seen = new Set<string>()
+			for (const entry of list) {
+				const audio = normalizeMusicToAudio(entry, now)
+				if (!audio || seen.has(audio.id)) continue
+				seen.add(audio.id)
+				items.push(audio)
+			}
+			registerAudioStreams(items)
+			const nextCursor = String(res.cursor ?? res.max_cursor ?? '0')
+			const hasMore =
+				Boolean(res.has_more === 1 || res.has_more === true) &&
+				nextCursor !== '0' &&
+				items.length > 0
+			return { items, nextCursor, hasMore, actualMode: 'music' as const }
 		}
-		const now = Date.now()
-		const items: DouyinAudio[] = []
-		const seen = new Set<string>()
-		for (const entry of list) {
-			const audio = normalizeMusicToAudio(entry, now)
-			if (!audio || seen.has(audio.id)) continue
-			seen.add(audio.id)
-			items.push(audio)
+
+		const fetchVideo = async (cur: string) => {
+			const endpoint = `/aweme/v1/web/aweme/listcollection/?device_platform=webapp&aid=6383&channel=channel_pc_web&publish_video_strategy_type=2&count=${count}&cursor=${encodeURIComponent(cur)}`
+			const raw = await Orpheus.douyinApiRequest(endpoint)
+			const res = safeParseDouyinJson(raw)
+			const list = Array.isArray(res.aweme_list)
+				? res.aweme_list
+				: Array.isArray(res.items)
+					? res.items
+					: []
+			const statusCode = Number(res.status_code ?? 0)
+			if (statusCode !== 0 && !Array.isArray(res.aweme_list)) {
+				const msg =
+					typeof res.status_msg === 'string' && res.status_msg
+						? res.status_msg
+						: '读取抖音视频收藏失败，请确认已登录抖音账号'
+				throw new Error(msg)
+			}
+			const now = Date.now()
+			const items: DouyinAudio[] = []
+			const seen = new Set<string>()
+			for (const entry of list) {
+				const obj = asObject(entry)
+				const candidate = obj?.aweme ?? obj?.aweme_info ?? entry
+				const audio = normalizeAwemeToAudio(candidate, now)
+				if (!audio || seen.has(audio.id)) continue
+				seen.add(audio.id)
+				items.push(audio)
+			}
+			registerAudioStreams(items)
+			const nextCursor = String(res.cursor ?? res.max_cursor ?? '0')
+			const hasMore =
+				Boolean(res.has_more === 1 || res.has_more === true) &&
+				nextCursor !== '0' &&
+				items.length > 0
+			return { items, nextCursor, hasMore, actualMode: 'video' as const }
 		}
-		registerAudioStreams(items)
-		const nextCursor = String(res.cursor ?? res.max_cursor ?? '0')
-		const hasMore =
-			Boolean(res.has_more === 1 || res.has_more === true) &&
-			nextCursor !== '0' &&
-			items.length > 0
-		return { items, nextCursor, hasMore }
+
+		if (mode === 'music') {
+			return fetchMusic(cursor)
+		}
+		if (mode === 'video') {
+			return fetchVideo(cursor)
+		}
+
+		// mode === 'all' (smart dual-source fallback)
+		let musicErr: Error | null = null
+		try {
+			const musicRes = await fetchMusic(cursor)
+			if (musicRes.items.length > 0) {
+				return musicRes
+			}
+		} catch (err) {
+			musicErr = err instanceof Error ? err : new Error(String(err))
+		}
+
+		try {
+			const videoRes = await fetchVideo(cursor)
+			if (videoRes.items.length > 0) {
+				return videoRes
+			}
+		} catch (videoErr) {
+			if (musicErr) {
+				throw musicErr
+			}
+			throw videoErr instanceof Error ? videoErr : new Error(String(videoErr))
+		}
+
+		return { items: [], nextCursor: '0', hasMore: false, actualMode: 'music' }
 	}
 }
 

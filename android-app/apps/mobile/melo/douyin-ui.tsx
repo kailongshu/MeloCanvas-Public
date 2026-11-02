@@ -399,6 +399,7 @@ export function DouyinCollectionModal({
 	const c = useTheme().tokens
 	const insets = useSafeAreaInsets()
 	const douyinState = useDouyinSession()
+	const [mode, setMode] = useState<'all' | 'music' | 'video'>('all')
 	const [items, setItems] = useState<DouyinAudio[]>([])
 	const [cursor, setCursor] = useState('0')
 	const [hasMore, setHasMore] = useState(false)
@@ -407,28 +408,31 @@ export function DouyinCollectionModal({
 	const [error, setError] = useState('')
 	const requestSeq = useRef(0)
 
-	const loadInitial = useCallback(async () => {
-		if (!visible) return
-		const token = ++requestSeq.current
-		setLoading(true)
-		setError('')
-		try {
-			const res = await douyinSession.fetchCollections('0', 20)
-			if (requestSeq.current !== token) return
-			setItems(res.items)
-			setCursor(res.nextCursor)
-			setHasMore(res.hasMore)
-		} catch (err) {
-			if (requestSeq.current !== token) return
-			setError(
-				err instanceof Error && err.message
-					? err.message
-					: '读取抖音音乐收藏失败，请确认已登录抖音账号',
-			)
-		} finally {
-			if (requestSeq.current === token) setLoading(false)
-		}
-	}, [visible])
+	const loadInitial = useCallback(
+		async (targetMode = mode) => {
+			if (!visible) return
+			const token = ++requestSeq.current
+			setLoading(true)
+			setError('')
+			try {
+				const res = await douyinSession.fetchCollections('0', 20, targetMode)
+				if (requestSeq.current !== token) return
+				setItems(res.items)
+				setCursor(res.nextCursor)
+				setHasMore(res.hasMore)
+			} catch (err) {
+				if (requestSeq.current !== token) return
+				setError(
+					err instanceof Error && err.message
+						? err.message
+						: '读取抖音收藏失败，请确认已登录抖音账号',
+				)
+			} finally {
+				if (requestSeq.current === token) setLoading(false)
+			}
+		},
+		[visible, mode],
+	)
 
 	const loadNextPage = useCallback(async () => {
 		if (!visible || !hasMore || loading || loadingMore) return
@@ -436,7 +440,7 @@ export function DouyinCollectionModal({
 		setLoadingMore(true)
 		setError('')
 		try {
-			const res = await douyinSession.fetchCollections(cursor, 20)
+			const res = await douyinSession.fetchCollections(cursor, 20, mode)
 			if (requestSeq.current !== token) return
 			setItems((prev) => {
 				const seen = new Set(prev.map((item) => item.id))
@@ -462,7 +466,7 @@ export function DouyinCollectionModal({
 		} finally {
 			if (requestSeq.current === token) setLoadingMore(false)
 		}
-	}, [cursor, hasMore, loading, loadingMore, visible])
+	}, [cursor, hasMore, loading, loadingMore, mode, visible])
 
 	useEffect(() => {
 		if (visible) {
@@ -475,7 +479,7 @@ export function DouyinCollectionModal({
 
 	if (!visible) return null
 
-	const title = '抖音 · 音乐收藏'
+	const title = '抖音 · 我的收藏'
 
 	return (
 		<Modal
@@ -509,11 +513,47 @@ export function DouyinCollectionModal({
 										size={12}
 										muted
 									>
-										登录抖音后即可直接读取你「收藏 -> 音乐」板块里的全部音乐与原声并在后台听歌。
+										登录抖音后即可直接读取你「收藏」板块里的全部音乐与原声并在后台听歌。
 									</T>
 									<Button onPress={onOpenLogin}>扫码 / 手机号登录抖音</Button>
 								</Card>
 							)}
+							<View
+								style={{
+									flexDirection: 'row',
+									flexWrap: 'wrap',
+									gap: 8,
+									alignItems: 'center',
+								}}
+							>
+								<Button
+									secondary={mode !== 'all'}
+									onPress={() => {
+										setMode('all')
+										void loadInitial('all')
+									}}
+								>
+									全部收藏
+								</Button>
+								<Button
+									secondary={mode !== 'music'}
+									onPress={() => {
+										setMode('music')
+										void loadInitial('music')
+									}}
+								>
+									音乐收藏
+								</Button>
+								<Button
+									secondary={mode !== 'video'}
+									onPress={() => {
+										setMode('video')
+										void loadInitial('video')
+									}}
+								>
+									视频原声
+								</Button>
+							</View>
 							<View
 								style={{
 									flexDirection: 'row',
@@ -572,7 +612,7 @@ export function DouyinCollectionModal({
 						) : error ? (
 							<State
 								mascot='error'
-								title='暂时无法读取音乐收藏'
+								title='暂时无法读取我的收藏'
 								message={error}
 								retry={() => {
 									void loadInitial()
@@ -581,11 +621,11 @@ export function DouyinCollectionModal({
 						) : (
 							<State
 								mascot='empty'
-								title='暂无收藏的抖音音乐'
+								title='暂无收藏内容'
 								message={
 									douyinState.status === 'authenticated'
-										? '在抖音 App 中收藏音乐或原声（收藏 -> 音乐）后，点击刷新即可同步播放。'
-										: '请先登录抖音账号以同步「收藏 -> 音乐」列表。'
+										? '在抖音 App 中收藏音乐或视频原声后，点击刷新即可同步播放。'
+										: '请先登录抖音账号以同步「我的收藏」列表。'
 								}
 							/>
 						)

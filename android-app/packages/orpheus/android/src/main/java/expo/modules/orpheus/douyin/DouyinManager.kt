@@ -105,7 +105,9 @@ object DouyinManager {
                     for (pair in cleaned.split(';')) {
                         val trimmed = pair.trim()
                         if (trimmed.contains('=')) {
-                            cm.setCookie("https://www.douyin.com", "$trimmed; Domain=.douyin.com; Path=/")
+                            cm.setCookie("https://www.douyin.com", "$trimmed; Path=/")
+                            cm.setCookie("https://sso.douyin.com", "$trimmed; Path=/")
+                            cm.setCookie("https://douyin.com", "$trimmed; Path=/")
                             cm.setCookie(DOUYIN_HOME, "$trimmed; Path=/")
                         }
                     }
@@ -162,6 +164,26 @@ object DouyinManager {
                     if (!window.__meloQrHooked) {
                         window.__meloQrHooked = true;
                         window.__meloLastQr = '';
+                        var origFetch = window.fetch;
+                        if (origFetch) {
+                            window.fetch = function() {
+                                var args = arguments;
+                                return origFetch.apply(this, args).then(function(res) {
+                                    try {
+                                        var u = String(args[0] || '');
+                                        if (u.indexOf('get_qrcode') >= 0 || u.indexOf('qrcode') >= 0) {
+                                            res.clone().json().then(function(j) {
+                                                if (j && j.data && j.data.qrcode) {
+                                                    var q = String(j.data.qrcode);
+                                                    window.__meloLastQr = q.indexOf('data:image') === 0 ? q : ('data:image/png;base64,' + q);
+                                                }
+                                            }).catch(function(){});
+                                        }
+                                    } catch(e) {}
+                                    return res;
+                                });
+                            };
+                        }
                         var origOpen = XMLHttpRequest.prototype.open;
                         var origSend = XMLHttpRequest.prototype.send;
                         XMLHttpRequest.prototype.open = function(m, u) {
@@ -172,7 +194,7 @@ object DouyinManager {
                             var self = this;
                             this.addEventListener('load', function() {
                                 try {
-                                    if (self.__meloUrl && self.__meloUrl.indexOf('get_qrcode') >= 0) {
+                                    if (self.__meloUrl && (self.__meloUrl.indexOf('get_qrcode') >= 0 || self.__meloUrl.indexOf('qrcode') >= 0)) {
                                         var j = JSON.parse(self.responseText || '{}');
                                         if (j && j.data && j.data.qrcode) {
                                             var q = String(j.data.qrcode);
@@ -185,13 +207,77 @@ object DouyinManager {
                         };
                     }
 
-                    function findDomQr() {
-                        var imgs = document.querySelectorAll('img');
-                        for (var i = 0; i < imgs.length; i++) {
-                            var src = imgs[i].getAttribute('src') || imgs[i].src || '';
-                            if (src.indexOf('data:image/png;base64,') === 0 && src.length > 200) {
-                                return src;
+                    function isSafeQrSrc(src) {
+                        if (!src || typeof src !== 'string') return false;
+                        var s = src.toLowerCase();
+                        if (s.indexOf('logo') >= 0 || s.indexOf('icon') >= 0 || s.indexOf('avatar') >= 0 ||
+                            s.indexOf('badge') >= 0 || s.indexOf('download') >= 0 || s.indexOf('favicon') >= 0) {
+                            return false;
+                        }
+                        return (s.indexOf('data:image') === 0 && s.length > 500) || (s.indexOf('qrcode') >= 0);
+                    }
+
+                    function checkContainerQr(doc) {
+                        if (!doc) return '';
+                        var containers = doc.querySelectorAll(
+                            'div[data-e2e="qrcode-login-container"], div[data-e2e="web-login-container"], ' +
+                            'div[data-e2e="login-modal"], .qrcode-login-container, .web-login-container, ' +
+                            'div[class*="login-container"], div[class*="qrcode-container"], div[class*="login_container"]'
+                        );
+                        for (var c = 0; c < containers.length; c++) {
+                            var container = containers[c];
+                            var canvases = container.querySelectorAll('canvas');
+                            for (var i = 0; i < canvases.length; i++) {
+                                var cv = canvases[i];
+                                if (cv.width >= 60 && cv.height >= 60) {
+                                    try {
+                                        var data = cv.toDataURL('image/png');
+                                        if (data && data.length > 500) return data;
+                                    } catch(e) {}
+                                }
                             }
+                            var imgs = container.querySelectorAll('img');
+                            for (var j = 0; j < imgs.length; j++) {
+                                var im = imgs[j];
+                                var src = im.getAttribute('src') || im.src || '';
+                                if (isSafeQrSrc(src)) {
+                                    return src.indexOf('data:image') === 0 ? src : ('data:image/png;base64,' + src);
+                                }
+                            }
+                        }
+                        var qrCanvases = doc.querySelectorAll('canvas.qrcode-canvas, canvas[class*="qrcode"], canvas[class*="qr-code"]');
+                        for (var k = 0; k < qrCanvases.length; k++) {
+                            var qcv = qrCanvases[k];
+                            if (qcv.width >= 60 && qcv.height >= 60) {
+                                try {
+                                    var d = qcv.toDataURL('image/png');
+                                    if (d && d.length > 500) return d;
+                                } catch(e) {}
+                            }
+                        }
+                        var qrImgs = doc.querySelectorAll('img[class*="qrcode"], img[class*="qr-code"], img[src*="qrcode"], img[alt*="二维码"], img[alt*="扫码"]');
+                        for (var m = 0; m < qrImgs.length; m++) {
+                            var msrc = qrImgs[m].getAttribute('src') || qrImgs[m].src || '';
+                            if (isSafeQrSrc(msrc)) {
+                                return msrc.indexOf('data:image') === 0 ? msrc : ('data:image/png;base64,' + msrc);
+                            }
+                        }
+                        return '';
+                    }
+
+                    function findRealQr() {
+                        if (window.__meloLastQr && window.__meloLastQr.length > 200) {
+                            return window.__meloLastQr;
+                        }
+                        var mainQr = checkContainerQr(document);
+                        if (mainQr) return mainQr;
+                        var iframes = document.querySelectorAll('iframe');
+                        for (var f = 0; f < iframes.length; f++) {
+                            try {
+                                var idoc = iframes[f].contentDocument || iframes[f].contentWindow.document;
+                                var iqr = checkContainerQr(idoc);
+                                if (iqr) return iqr;
+                            } catch(e) {}
                         }
                         return window.__meloLastQr || '';
                     }
@@ -200,25 +286,41 @@ object DouyinManager {
                         var all = document.querySelectorAll('button, div, span, a, p');
                         for (var i = 0; i < all.length; i++) {
                             var t = (all[i].innerText || '').trim();
-                            if (t === '点击刷新' || t === '二维码已失效' || t === '刷新二维码') {
+                            if (t === '点击刷新' || t === '二维码已失效' || t === '刷新二维码' || t === '重新获取') {
                                 try { all[i].click(); } catch(e) {}
                             }
                         }
                         for (var j = 0; j < all.length; j++) {
                             var txt = (all[j].innerText || '').trim();
-                            if (txt === '扫码登录') {
+                            if (txt === '扫码登录' || txt === '二维码登录') {
                                 try { all[j].click(); } catch(e) {}
                             }
                         }
-                        var existing = findDomQr();
-                        if (!existing) {
-                            for (var k = 0; k < all.length; k++) {
-                                var lt = (all[k].innerText || '').trim();
-                                if (lt === '登录') {
-                                    try { all[k].click(); break; } catch(e) {}
+                        var loginContainer = document.querySelector('div[data-e2e="web-login-container"], .web-login-container, div[data-e2e="login-modal"]');
+                        if (!loginContainer) {
+                            var loginBtn = document.querySelector('button[data-e2e="login-button"], button[data-e2e="nav-login-button"], [data-e2e="login-button"]');
+                            if (loginBtn) {
+                                try { loginBtn.click(); } catch(e) {}
+                            } else {
+                                for (var k = 0; k < all.length; k++) {
+                                    var lt = (all[k].innerText || '').trim();
+                                    if (lt === '登录' && all[k].offsetWidth > 0 && all[k].offsetHeight > 0) {
+                                        try { all[k].click(); break; } catch(e) {}
+                                    }
                                 }
                             }
                         }
+                        try {
+                            var ssoUrl = 'https://sso.douyin.com/get_qrcode/?service=https%3A%2F%2Fwww.douyin.com&need_logo=false&need_short_url=true&device_platform=web_app&aid=6383&account_sdk_source=sso&sdk_version=2.2.8-beta.0&language=zh';
+                            fetch(ssoUrl, { credentials: 'include' })
+                                .then(function(r) { return r.json(); })
+                                .then(function(j) {
+                                    if (j && j.data && j.data.qrcode) {
+                                        var q = String(j.data.qrcode);
+                                        window.__meloLastQr = q.indexOf('data:image') === 0 ? q : ('data:image/png;base64,' + q);
+                                    }
+                                }).catch(function(){});
+                        } catch(e) {}
                     }
 
                     clickRefreshOrLogin();
@@ -228,37 +330,20 @@ object DouyinManager {
                         document.querySelectorAll('video, audio').forEach(function(m) {
                             try { m.muted = true; m.pause(); } catch(e) {}
                         });
-                        var qr = findDomQr();
+                        var qr = findRealQr();
                         if (qr) {
                             clearInterval(timer);
                             window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'ready', qrcode: qr }));
                             return;
                         }
-                        if (attempts === 4 || attempts === 10) {
+                        if (attempts === 3 || attempts === 8 || attempts === 14) {
                             clickRefreshOrLogin();
                         }
-                        if (attempts === 8) {
-                            try {
-                                var xhr = new XMLHttpRequest();
-                                xhr.open('GET', 'https://sso.douyin.com/get_qrcode/?service=https%3A%2F%2Fwww.douyin.com&need_logo=false&need_short_url=true&device_platform=web_app&aid=6383&account_sdk_source=sso&sdk_version=2.2.8-beta.0&language=zh', true);
-                                xhr.withCredentials = true;
-                                xhr.onload = function() {
-                                    try {
-                                        var r = JSON.parse(xhr.responseText || '{}');
-                                        if (r && r.data && r.data.qrcode) {
-                                            var raw = String(r.data.qrcode);
-                                            window.__meloLastQr = raw.indexOf('data:image') === 0 ? raw : ('data:image/png;base64,' + raw);
-                                        }
-                                    } catch(e) {}
-                                };
-                                xhr.send();
-                            } catch(e) {}
-                        }
-                        if (attempts >= 22) {
+                        if (attempts >= 25) {
                             clearInterval(timer);
                             window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'empty', qrcode: '' }));
                         }
-                    }, 220);
+                    }, 200);
                 } catch (err) {
                     window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'error', qrcode: '' }));
                 }
@@ -268,7 +353,7 @@ object DouyinManager {
         withContext(Dispatchers.Main) {
             wv.evaluateJavascript(js, null)
         }
-        val res = withTimeoutOrNull(7500L) { deferred.await() }
+        val res = withTimeoutOrNull(8500L) { deferred.await() }
             ?: JSONObject().put("status", "timeout").put("qrcode", "").toString()
         pendingFetch.remove(id)
         return res
@@ -301,16 +386,81 @@ object DouyinManager {
                     document.querySelectorAll('video, audio').forEach(function(m) {
                         try { m.muted = true; m.pause(); } catch(e) {}
                     });
-                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
-                    var qr = '';
-                    var imgs = document.querySelectorAll('img');
-                    for (var i = 0; i < imgs.length; i++) {
-                        var src = imgs[i].getAttribute('src') || imgs[i].src || '';
-                        if (src.indexOf('data:image/png;base64,') === 0 && src.length > 200) {
-                            qr = src;
-                            break;
+                    function isSafeQrSrc(src) {
+                        if (!src || typeof src !== 'string') return false;
+                        var s = src.toLowerCase();
+                        if (s.indexOf('logo') >= 0 || s.indexOf('icon') >= 0 || s.indexOf('avatar') >= 0 ||
+                            s.indexOf('badge') >= 0 || s.indexOf('download') >= 0 || s.indexOf('favicon') >= 0) {
+                            return false;
                         }
+                        return (s.indexOf('data:image') === 0 && s.length > 500) || (s.indexOf('qrcode') >= 0);
                     }
+                    function checkContainerQr(doc) {
+                        if (!doc) return '';
+                        var containers = doc.querySelectorAll(
+                            'div[data-e2e="qrcode-login-container"], div[data-e2e="web-login-container"], ' +
+                            'div[data-e2e="login-modal"], .qrcode-login-container, .web-login-container, ' +
+                            'div[class*="login-container"], div[class*="qrcode-container"], div[class*="login_container"]'
+                        );
+                        for (var c = 0; c < containers.length; c++) {
+                            var container = containers[c];
+                            var canvases = container.querySelectorAll('canvas');
+                            for (var i = 0; i < canvases.length; i++) {
+                                var cv = canvases[i];
+                                if (cv.width >= 60 && cv.height >= 60) {
+                                    try {
+                                        var data = cv.toDataURL('image/png');
+                                        if (data && data.length > 500) return data;
+                                    } catch(e) {}
+                                }
+                            }
+                            var imgs = container.querySelectorAll('img');
+                            for (var j = 0; j < imgs.length; j++) {
+                                var im = imgs[j];
+                                var src = im.getAttribute('src') || im.src || '';
+                                if (isSafeQrSrc(src)) {
+                                    return src.indexOf('data:image') === 0 ? src : ('data:image/png;base64,' + src);
+                                }
+                            }
+                        }
+                        var qrCanvases = doc.querySelectorAll('canvas.qrcode-canvas, canvas[class*="qrcode"], canvas[class*="qr-code"]');
+                        for (var k = 0; k < qrCanvases.length; k++) {
+                            var qcv = qrCanvases[k];
+                            if (qcv.width >= 60 && qcv.height >= 60) {
+                                try {
+                                    var d = qcv.toDataURL('image/png');
+                                    if (d && d.length > 500) return d;
+                                } catch(e) {}
+                            }
+                        }
+                        var qrImgs = doc.querySelectorAll('img[class*="qrcode"], img[class*="qr-code"], img[src*="qrcode"], img[alt*="二维码"], img[alt*="扫码"]');
+                        for (var m = 0; m < qrImgs.length; m++) {
+                            var msrc = qrImgs[m].getAttribute('src') || qrImgs[m].src || '';
+                            if (isSafeQrSrc(msrc)) {
+                                return msrc.indexOf('data:image') === 0 ? msrc : ('data:image/png;base64,' + msrc);
+                            }
+                        }
+                        return '';
+                    }
+                    function findRealQr() {
+                        if (window.__meloLastQr && window.__meloLastQr.length > 200) {
+                            return window.__meloLastQr;
+                        }
+                        var mainQr = checkContainerQr(document);
+                        if (mainQr) return mainQr;
+                        var iframes = document.querySelectorAll('iframe');
+                        for (var f = 0; f < iframes.length; f++) {
+                            try {
+                                var idoc = iframes[f].contentDocument || iframes[f].contentWindow.document;
+                                var iqr = checkContainerQr(idoc);
+                                if (iqr) return iqr;
+                            } catch(e) {}
+                        }
+                        return window.__meloLastQr || '';
+                    }
+
+                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+                    var qr = findRealQr();
                     if (bodyText.indexOf('扫码成功') >= 0 || bodyText.indexOf('请在手机上确认') >= 0) {
                         window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'scanned', qrcode: qr }));
                         return;
@@ -319,10 +469,21 @@ object DouyinManager {
                         var all = document.querySelectorAll('button, div, span, a, p');
                         for (var j = 0; j < all.length; j++) {
                             var t = (all[j].innerText || '').trim();
-                            if (t === '点击刷新' || t === '二维码已失效') {
+                            if (t === '点击刷新' || t === '二维码已失效' || t === '刷新二维码' || t === '重新获取') {
                                 try { all[j].click(); } catch(e) {}
                             }
                         }
+                        try {
+                            var ssoUrl = 'https://sso.douyin.com/get_qrcode/?service=https%3A%2F%2Fwww.douyin.com&need_logo=false&need_short_url=true&device_platform=web_app&aid=6383&account_sdk_source=sso&sdk_version=2.2.8-beta.0&language=zh';
+                            fetch(ssoUrl, { credentials: 'include' })
+                                .then(function(r) { return r.json(); })
+                                .then(function(j) {
+                                    if (j && j.data && j.data.qrcode) {
+                                        var q = String(j.data.qrcode);
+                                        window.__meloLastQr = q.indexOf('data:image') === 0 ? q : ('data:image/png;base64,' + q);
+                                    }
+                                }).catch(function(){});
+                        } catch(e) {}
                         window.MeloDouyinBridge.onResult($id, JSON.stringify({ status: 'expired', qrcode: qr }));
                         return;
                     }
@@ -584,8 +745,20 @@ object DouyinManager {
         }.getOrNull()
     }
 
+    private fun deduceRefererPath(endpoint: String): String {
+        return when {
+            endpoint.contains("/music/listcollection/") ||
+            endpoint.contains("/aweme/listcollection/") ||
+            endpoint.contains("/collects/") -> "/user/self?showTab=favorite_collection"
+            endpoint.contains("/query/user/") || endpoint.contains("/user/profile/") -> "/user/self"
+            endpoint.contains("/search/") -> "/search?type=video"
+            endpoint.contains("/favorite/") -> "/user/self?showTab=like"
+            else -> "/user/self"
+        }
+    }
+
     /**
-     * Executes a Douyin web API endpoint inside www.douyin.com WebView context using XMLHttpRequest
+     * Executes a Douyin web API endpoint inside www.douyin.com WebView context using XMLHttpRequest/fetch
      * so ByteDance's bdms SDK automatically signs a_bogus and attaches HttpOnly cookies.
      */
     suspend fun apiRequest(context: Context, endpoint: String): String {
@@ -603,7 +776,8 @@ object DouyinManager {
             return executeSearchWithFallback(context, normalizedEndpoint)
         }
 
-        val webBody = executeWebViewXhr(context, normalizedEndpoint, isPost, postBody)
+        val referer = deduceRefererPath(normalizedEndpoint)
+        val webBody = executeWebViewXhr(context, normalizedEndpoint, isPost, postBody, referer)
         if (webBody.trim().startsWith("{")) {
             return webBody
         }
@@ -639,24 +813,59 @@ object DouyinManager {
                     if (ref) {
                         try { history.replaceState(null, '', ref); } catch(e) {}
                     }
-                    var xhr = new XMLHttpRequest();
-                    xhr.open('$method', $escapedUrl, true);
-                    xhr.withCredentials = true;
-                    xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
-                    if (${if (isPost) "true" else "false"}) {
-                        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+                    var done = false;
+                    function finish(body) {
+                        if (done) return;
+                        done = true;
+                        window.MeloDouyinBridge.onResult($id, body || '');
                     }
-                    xhr.onload = function() {
-                        window.MeloDouyinBridge.onResult($id, xhr.responseText || '');
-                    };
-                    xhr.onerror = function() {
-                        window.MeloDouyinBridge.onResult($id, '');
-                    };
-                    xhr.ontimeout = function() {
-                        window.MeloDouyinBridge.onResult($id, '');
-                    };
-                    xhr.timeout = 11000;
-                    xhr.send(${if (isPost) escapedBody else "null"});
+                    function doXhr() {
+                        try {
+                            var xhr = new XMLHttpRequest();
+                            xhr.open('$method', $escapedUrl, true);
+                            xhr.withCredentials = true;
+                            xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
+                            if (${if (isPost) "true" else "false"}) {
+                                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+                            }
+                            xhr.onload = function() { finish(xhr.responseText || ''); };
+                            xhr.onerror = function() { finish(''); };
+                            xhr.ontimeout = function() { finish(''); };
+                            xhr.timeout = 11000;
+                            xhr.send(${if (isPost) escapedBody else "null"});
+                        } catch (e) {
+                            finish('');
+                        }
+                    }
+                    if (typeof window.fetch === 'function') {
+                        try {
+                            var opts = {
+                                method: '$method',
+                                credentials: 'include',
+                                headers: { 'Accept': 'application/json, text/plain, */*' }
+                            };
+                            if (${if (isPost) "true" else "false"}) {
+                                opts.headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+                                opts.body = $escapedBody;
+                            }
+                            window.fetch($escapedUrl, opts).then(function(res) {
+                                return res.text();
+                            }).then(function(txt) {
+                                if (txt && txt.trim().indexOf('{') === 0) {
+                                    finish(txt);
+                                } else {
+                                    doXhr();
+                                }
+                            }).catch(function() {
+                                doXhr();
+                            });
+                            setTimeout(function() { if (!done) doXhr(); }, 6000);
+                        } catch(err) {
+                            doXhr();
+                        }
+                    } else {
+                        doXhr();
+                    }
                 } catch (e) {
                     window.MeloDouyinBridge.onResult($id, '');
                 }
@@ -927,10 +1136,11 @@ object DouyinManager {
     }
 
     private fun directPost(url: String, formBody: String, ua: String = DESKTOP_UA): String {
+        val referer = "https://www.douyin.com" + deduceRefererPath(url)
         val builder = Request.Builder()
             .url(url)
             .header("User-Agent", ua)
-            .header("Referer", DOUYIN_HOME)
+            .header("Referer", referer)
             .header("Origin", "https://www.douyin.com")
             .header("Accept", "application/json, text/plain, */*")
             .post(formBody.toRequestBody("application/x-www-form-urlencoded; charset=UTF-8".toMediaType()))
@@ -943,10 +1153,11 @@ object DouyinManager {
     }
 
     private fun directGet(url: String, ua: String = DESKTOP_UA): String {
+        val referer = "https://www.douyin.com" + deduceRefererPath(url)
         val builder = Request.Builder()
             .url(url)
             .header("User-Agent", ua)
-            .header("Referer", DOUYIN_HOME)
+            .header("Referer", referer)
             .header("Accept", "application/json, text/plain, */*")
         val cookie = currentMergedCookie()
         if (cookie.isNotBlank()) builder.header("Cookie", cookie)
